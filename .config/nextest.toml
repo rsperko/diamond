@@ -29,5 +29,5 @@ failure-output = "final"
 
 # Integration tests get more time (spawn dm binary, complex git operations)
 [[profile.default.overrides]]
-filter = "package(diamond) & kind(test)"
+filter = "package(diamond-cli) & kind(test)"
 slow-timeout = { period = "60s", terminate-after = 2 }
