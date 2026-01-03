@@ -1,0 +1,41 @@
+#!/bin/sh
+#
+# Pre-commit hook to run Gitleaks protection
+#
+# This script ensures that no secrets are committed to the repository.
+# It requires 'gitleaks' to be installed and available in the PATH.
+
+command -v gitleaks >/dev/null 2>&1 || {
+    echo "Error: gitleaks is not installed or not in the PATH."
+    echo "Please install it (e.g., 'brew install gitleaks') to commit changes."
+    exit 1
+}
+
+# Run gitleaks protect
+# --staged: Only scan staged changes
+# --redact: Redact secrets in output
+# --verbose: Show detailed report
+echo "Running gitleaks protection..."
+gitleaks protect --staged --redact --verbose
+
+# Capture the exit code
+STATUS=$?
+
+if [ $STATUS -eq 0 ]; then
+    echo "Gitleaks check passed."
+else
+    echo "
+    ______________________________________________________________________
+   /                                                                      \\
+  |  GITLEAKS DETECTED SECRETS!                                          |
+  |                                                                      |
+  |  Your commit has been blocked because it contains potential secrets. |
+  |  Please remove the secrets and stage the changes again.              |
+  |                                                                      |
+  |  If this is a false positive, you can add a comment to the line:     |
+  |  # gitleaks:allow                                                    |
+   \\______________________________________________________________________/
+    "
+fi
+
+exit $STATUS

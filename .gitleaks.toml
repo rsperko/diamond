@@ -1,0 +1,5 @@
+[extend]
+# We want to use the default configuration provided by Gitleaks.
+# This file is present to explicitly mark that we are using Gitleaks
+# and to provide a place for future custom rules or allowlists.
+useDefault = true

@@ -4,7 +4,7 @@
 
 Diamond is a lightning-fast CLI for stacked pull requests—the workflow used at Meta, Google, and top engineering teams to ship code 4x faster.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 ---
 
@@ -413,8 +413,13 @@ git clone https://github.com/rsperko/diamond.git
 cd diamond
 cargo build
 cargo test                 # 206+ tests, ~90% coverage
+cargo test                 # 206+ tests, ~90% coverage
 cargo clippy -- -D warnings
-```
+make setup-hooks           # Configure git hooks (Gitleaks)
+
+**Security:**
+This project uses [Gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from being committed.
+Run `make setup-hooks` to install the pre-commit hook that checks for secrets.
 
 **Architecture:**
 - `src/main.rs` – CLI parsing (clap)
@@ -439,7 +444,7 @@ Diamond brings this workflow to **any team using GitHub or GitLab**, with the sp
 
 ## License
 
-MIT © 2025
+Apache 2.0 © 2025
 
 Built with ❤️ for developers who ship fast.
 

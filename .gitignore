@@ -26,6 +26,8 @@ Thumbs.db
 .gemini/
 scaffolding/
 agent_notes/
+AGENTS.md
+CLAUDE.md
 CLAUDE.local.md
 
 # Testing/Development
