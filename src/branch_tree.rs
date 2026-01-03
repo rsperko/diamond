@@ -137,21 +137,11 @@ pub fn find_current_branch_index(branches: &[BranchDisplay]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
     use super::*;
     use crate::git_gateway::GitGateway;
 
     use tempfile::tempdir;
-
-    fn init_test_repo(path: &std::path::Path) -> anyhow::Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit message", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
 
     #[test]
     fn test_format_indent_zero_depth() {
@@ -242,7 +232,7 @@ mod tests {
         assert!(hash.len() >= 7, "Hash should be at least 7 chars");
 
         // Message should match what we committed
-        assert_eq!(message, "Initial commit message");
+        assert_eq!(message, "Initial commit");
 
         // Time should be non-empty (relative time like "just now" or "X seconds ago")
         assert!(!time.is_empty(), "Time should not be empty");

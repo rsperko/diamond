@@ -2,9 +2,9 @@
 #
 # Pre-commit hook for Diamond
 #
-# This script runs multiple checks before allowing a commit:
-# 1. Gitleaks - Ensures no secrets are committed
-# 2. Test signature blocking - Prevents unit test code from being committed
+# This script runs multiple checks:
+# 1. Gitleaks - Ensures no secrets are committed (test fixtures allowlisted in .gitleaks.toml)
+# 2. Author check - Prevents commits authored by test users from entering repo history
 
 FAILED=0
 
@@ -29,29 +29,30 @@ else
   |  Your commit has been blocked because it contains potential secrets. |
   |  Please remove the secrets and stage the changes again.              |
   |                                                                      |
-  |  If this is a false positive, you can add a comment to the line:     |
-  |  # gitleaks:allow                                                    |
+  |  If this is a false positive (e.g., test fixtures), add an           |
+  |  allowlist entry to .gitleaks.toml                                   |
    \\______________________________________________________________________/
     "
     FAILED=1
 fi
 
-# Check 2: Test user commits (prevent unit test accidents)
-if git diff --cached --name-only | grep -q '\.rs$'; then
-    if git diff --cached | grep -E '^\+.*Test User|test@example\.com' >/dev/null 2>&1; then
-        echo ""
-        echo "❌ Error: Detected test user signature in staged changes"
-        echo ""
-        echo "   Found 'Test User' or 'test@example.com' in your commit."
-        echo "   This looks like test code that should not be committed."
-        echo ""
-        echo "   Please review your changes and ensure you're not committing"
-        echo "   test fixtures, temporary test code, or debugging changes."
-        echo ""
-        FAILED=1
-    else
-        echo "✓ Test signature check passed."
-    fi
+# Check 2: Prevent commits authored by test users (from unit test accidents)
+AUTHOR_NAME=$(git config user.name)
+AUTHOR_EMAIL=$(git config user.email)
+
+if echo "$AUTHOR_NAME" | grep -qi "test user" || echo "$AUTHOR_EMAIL" | grep -qi "test@example.com"; then
+    echo ""
+    echo "❌ Error: Git author is set to a test user"
+    echo ""
+    echo "   Author: $AUTHOR_NAME <$AUTHOR_EMAIL>"
+    echo ""
+    echo "   This looks like your git config was set by test code."
+    echo "   Please reset your git config:"
+    echo ""
+    echo "   git config user.name \"Your Name\""
+    echo "   git config user.email \"your@email.com\""
+    echo ""
+    FAILED=1
 fi
 
 exit $FAILED

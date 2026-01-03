@@ -500,7 +500,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     /// Retarget the next PR in the stack to trunk after a successful merge.
     ///
@@ -551,16 +551,6 @@ mod tests {
         }
 
         retargets
-    }
-
-    fn init_test_repo(path: &std::path::Path) -> anyhow::Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test", "test@test.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
     }
 
     fn create_branch(repo: &git2::Repository, name: &str) -> anyhow::Result<()> {

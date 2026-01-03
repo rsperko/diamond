@@ -3,29 +3,9 @@
 use super::*;
 use anyhow::Result;
 use git2::Repository;
-use std::path::Path;
 use tempfile::tempdir;
 
-fn init_test_repo(path: &Path) -> Result<Repository> {
-    let repo = Repository::init(path)?;
-
-    // Configure user for commits
-    let mut config = repo.config()?;
-    config.set_str("user.name", "Test User")?;
-    config.set_str("user.email", "test@example.com")?;
-
-    // Make initial commit so HEAD is valid
-    let sig = git2::Signature::now("Test User", "test@example.com")?;
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-
-    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-
-    // Drop tree explicitly before returning repo
-    drop(tree);
-
-    Ok(repo)
-}
+use crate::test_context::init_test_repo;
 
 /// Get the current branch name (the default branch after init)
 fn get_current_branch(repo: &Repository) -> Result<String> {

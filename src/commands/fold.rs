@@ -152,20 +152,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &std::path::Path) -> Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-
-        // Create initial commit
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     fn create_commit(repo: &git2::Repository, message: &str, parent: &git2::Commit) -> Result<git2::Oid> {
         let sig = git2::Signature::now("Test User", "test@example.com")?;

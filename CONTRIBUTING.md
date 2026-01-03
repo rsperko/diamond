@@ -36,13 +36,14 @@ This section guides you through submitting an enhancement suggestion for Diamond
 2.  **Clone your fork** locally.
 3.  **Setup the environment**:
     ```bash
-    make setup-hooks
+    just setup-hooks
     ```
 4.  **Create a branch** for your feature.
 5.  **Make changes**.
 6.  **Test your changes**:
     ```bash
-    make check
+    just check
+    # Or use cargo aliases: cargo fmt && cargo clippy && cargo t
     ```
 7.  **Commit and push** your changes.
     - Note: Commits are protected by Gitleaks. Ensure no secrets are included.

@@ -15,8 +15,11 @@ pub fn dm_binary() -> PathBuf {
 /// Helper to initialize a test git repository
 #[allow(dead_code)]
 pub fn init_test_repo(dir: &Path) -> Result<()> {
-    // Initialize git repo
-    Command::new("git").args(["init"]).current_dir(dir).output()?;
+    // Initialize git repo with explicit branch name to ensure consistency across environments
+    Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(dir)
+        .output()?;
 
     // Configure git
     Command::new("git")

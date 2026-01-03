@@ -74,28 +74,14 @@ pub fn complete_for_command(cmd: &str, _arg: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
     use super::*;
     use crate::git_gateway::GitGateway;
     use anyhow::Result;
 
-    use std::path::Path;
     use tempfile::tempdir;
 
     // Helper to initialize a test git repo with an initial commit
-    fn init_test_repo(path: &Path) -> Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-
-        // Make initial commit so HEAD is valid
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        Ok(repo)
-    }
-
     // Helper to set up tracked branches using RefStore
     fn setup_tracked_branches(branches: &[&str]) -> Result<()> {
         let gateway = GitGateway::new()?;

@@ -265,8 +265,8 @@ fn test_missing_trunk_ref_fails_gracefully() -> Result<()> {
 fn test_missing_diamond_auto_initializes() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
-    // Initialize git but NOT diamond
-    run_git(temp_dir.path(), &["init"])?;
+    // Initialize git but NOT diamond (use -b main for consistency across environments)
+    run_git(temp_dir.path(), &["init", "-b", "main"])?;
     run_git(temp_dir.path(), &["config", "user.name", "Test"])?;
     run_git(temp_dir.path(), &["config", "user.email", "test@test.com"])?;
     fs::write(temp_dir.path().join("README.md"), "# Test")?;

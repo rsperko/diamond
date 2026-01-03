@@ -27,9 +27,9 @@ fn init_bare_remote(path: &std::path::Path) -> Result<()> {
     // Create a temp dir for initial setup
     let setup_dir = TempDir::new()?;
 
-    // Initialize a regular repo
+    // Initialize a regular repo (use -b main for consistency across environments)
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(setup_dir.path())
         .output()?;
 

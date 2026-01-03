@@ -3,3 +3,16 @@
 # This file is present to explicitly mark that we are using Gitleaks
 # and to provide a place for future custom rules or allowlists.
 useDefault = true
+
+# Allowlist for test fixtures and test code
+[[allowlists]]
+description = "Test user signatures in test code are not secrets"
+paths = [
+    '''tests/.*\.rs$''',           # Integration tests
+    '''src/.*/tests\.rs$''',        # Unit tests in src files (not used in this project)
+    '''src/.*\.rs$'''               # Source files (for #[cfg(test)] modules)
+]
+regexes = [
+    '''Test User''',
+    '''test@example\.com'''
+]

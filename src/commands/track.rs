@@ -75,21 +75,10 @@ mod tests {
     use crate::git_gateway::GitGateway;
     use crate::ref_store::RefStore;
     use anyhow::Result;
-    use git2::Repository;
 
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &std::path::Path) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     #[test]
     fn test_track_without_trunk_fails() -> Result<()> {

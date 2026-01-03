@@ -2,18 +2,8 @@
 
 use super::*;
 use crate::branch_tree::build_branch_tree;
-use crate::test_context::TestRepoContext;
+use crate::test_context::{init_test_repo, TestRepoContext};
 use tempfile::tempdir;
-
-fn init_test_repo(path: &std::path::Path) -> anyhow::Result<git2::Repository> {
-    let repo = git2::Repository::init(path)?;
-    let sig = git2::Signature::now("Test User", "test@example.com")?;
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-    drop(tree);
-    Ok(repo)
-}
 
 #[test]
 fn test_find_roots_with_trunk() -> anyhow::Result<()> {

@@ -263,34 +263,12 @@ mod tests {
     use super::*;
     use crate::git_gateway::GitGateway;
     use crate::ref_store::RefStore;
-    use git2::Repository;
 
     use std::fs;
     use std::path::Path;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo_with_branch(path: &Path, branch_name: &str) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-
-        let mut config = repo.config()?;
-        config.set_str("init.defaultBranch", branch_name)?;
-        config.set_str("user.name", "Test User")?;
-        config.set_str("user.email", "test@example.com")?;
-
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-
-        let refname = format!("refs/heads/{}", branch_name);
-        repo.commit(Some(&refname), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        repo.set_head(&refname)?;
-
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo_with_branch, TestRepoContext};
 
     #[test]
     fn test_modify_without_message_amends() -> Result<()> {

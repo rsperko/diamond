@@ -249,23 +249,11 @@ mod tests {
     use crate::cache::Cache;
     use crate::ref_store::RefStore;
     use anyhow::Result;
-    use git2::Repository;
 
     use std::fs;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &std::path::Path) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        fs::create_dir(path.join(".git").join("diamond"))?;
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     #[test]
     fn test_create_branch_success() -> Result<()> {

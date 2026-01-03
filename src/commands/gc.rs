@@ -129,43 +129,9 @@ fn run_dry(gateway: GitGateway, max_age_days: u64, keep_per_branch: usize) -> Re
 mod tests {
     use super::*;
 
-    use std::path::Path;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &Path) -> Result<()> {
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()?;
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@example.com"])
-            .current_dir(path)
-            .output()?;
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()?;
-
-        std::fs::write(path.join("test.txt"), "test")?;
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(path)
-            .output()?;
-        std::process::Command::new("git")
-            .args(["commit", "-m", "Initial"])
-            .current_dir(path)
-            .output()?;
-
-        // Create a branch to back up
-        std::process::Command::new("git")
-            .args(["branch", "feature"])
-            .current_dir(path)
-            .output()?;
-
-        Ok(())
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     #[test]
     fn test_gc_no_backups() -> Result<()> {
@@ -186,8 +152,9 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
         init_test_repo(dir.path())?;
 
-        // Create some backup refs
+        // Create a feature branch and backup ref
         let gateway = GitGateway::new()?;
+        gateway.create_branch("feature")?;
         gateway.create_backup_ref("feature")?;
 
         // Dry run should succeed and not delete anything
@@ -210,6 +177,9 @@ mod tests {
         init_test_repo(dir.path())?;
 
         let gateway = GitGateway::new()?;
+
+        // Create a feature branch
+        gateway.create_branch("feature")?;
 
         // Get commit OID for creating refs
         let commit_oid = gateway.resolve_to_oid("HEAD")?;
@@ -249,6 +219,10 @@ mod tests {
         init_test_repo(dir.path())?;
 
         let gateway = GitGateway::new()?;
+
+        // Create a feature branch
+        gateway.create_branch("feature")?;
+        gateway.checkout_branch("feature")?;
 
         // Create 5 recent backups
         for i in 1..=5 {

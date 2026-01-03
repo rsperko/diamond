@@ -537,7 +537,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     // === Async function logic tests ===
 
@@ -643,16 +643,6 @@ mod tests {
     }
 
     // === Original tests ===
-
-    fn init_test_repo(path: &std::path::Path) -> Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
 
     #[tokio::test]
     async fn test_restack_no_trunk_fails() {

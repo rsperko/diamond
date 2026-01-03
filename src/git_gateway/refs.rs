@@ -61,18 +61,8 @@ impl GitGateway {
 mod tests {
     use super::*;
     use crate::git_gateway::GitGateway;
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
     use tempfile::tempdir;
-
-    fn init_test_repo(path: &std::path::Path) -> anyhow::Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
 
     /// Check if git version supports reftable (2.45+)
     fn git_supports_reftable() -> bool {
@@ -118,7 +108,7 @@ mod tests {
 
         // Create reftable repo using git CLI
         let status = std::process::Command::new("git")
-            .args(["init", "--ref-format=reftable"])
+            .args(["init", "-b", "main", "--ref-format=reftable"])
             .current_dir(dir.path())
             .status()?;
         assert!(status.success(), "Failed to create reftable repo");
@@ -290,7 +280,17 @@ mod tests {
 
         // Create reftable repo with initial commit
         std::process::Command::new("git")
-            .args(["init", "--ref-format=reftable"])
+            .args(["init", "-b", "main", "--ref-format=reftable"])
+            .current_dir(dir.path())
+            .status()?;
+
+        // Configure git user (needed for commit in CI)
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir.path())
+            .status()?;
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
             .current_dir(dir.path())
             .status()?;
 

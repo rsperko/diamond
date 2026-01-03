@@ -71,50 +71,9 @@ fn detect_trunk(gateway: &GitGateway) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use git2::Repository;
-
-    use std::path::Path;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &Path) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-
-        // Make initial commit so HEAD is valid
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        Ok(repo)
-    }
-
-    fn init_test_repo_with_branch(path: &Path, branch_name: &str) -> Result<Repository> {
-        // Set config to use the desired branch name as default
-        let repo = Repository::init(path)?;
-
-        // Configure the repo to use our branch name
-        let mut config = repo.config()?;
-        config.set_str("init.defaultBranch", branch_name)?;
-
-        // Make initial commit with the branch name we want
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-
-        // Create branch directly with desired name
-        let refname = format!("refs/heads/{}", branch_name);
-        repo.commit(Some(&refname), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        // Set HEAD to point to our branch
-        repo.set_head(&refname)?;
-
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, init_test_repo_with_branch, TestRepoContext};
 
     #[test]
     fn test_init_detects_main_branch() -> Result<()> {

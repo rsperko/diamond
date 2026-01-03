@@ -7,22 +7,7 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
 
-use crate::test_context::TestRepoContext;
-
-fn init_repo(path: &Path) -> Result<Repository> {
-    let repo = Repository::init(path)?;
-
-    // Make initial commit so HEAD is valid
-    let sig = git2::Signature::now("Test User", "test@example.com")?;
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-
-    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-
-    drop(tree);
-
-    Ok(repo)
-}
+use crate::test_context::{init_test_repo as init_repo, TestRepoContext};
 
 /// Helper to get HEAD commit message using git CLI (for test verification)
 fn get_head_message(path: &Path) -> Result<String> {

@@ -38,9 +38,9 @@ fn git_supports_reftable() -> bool {
 
 /// Initialize a reftable test repository
 fn init_reftable_repo(dir: &std::path::Path) -> Result<()> {
-    // Initialize git repo with reftable format
+    // Initialize git repo with reftable format (use -b main for consistency)
     let status = Command::new("git")
-        .args(["init", "--ref-format=reftable"])
+        .args(["init", "-b", "main", "--ref-format=reftable"])
         .current_dir(dir)
         .status()?;
     assert!(status.success(), "Failed to create reftable repo");
@@ -110,9 +110,9 @@ fn test_reftable_init() -> Result<()> {
 
     let temp_dir = TempDir::new()?;
 
-    // Create reftable repo
+    // Create reftable repo (use -b main for consistency)
     Command::new("git")
-        .args(["init", "--ref-format=reftable"])
+        .args(["init", "-b", "main", "--ref-format=reftable"])
         .current_dir(temp_dir.path())
         .status()?;
 

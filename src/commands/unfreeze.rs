@@ -70,24 +70,9 @@ mod tests {
     use anyhow::Result;
     use git2::Repository;
 
-    use std::path::Path;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &Path) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-        let mut config = repo.config()?;
-        config.set_str("user.name", "Test User")?;
-        config.set_str("user.email", "test@example.com")?;
-
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     fn create_branch(repo: &Repository, name: &str) -> Result<()> {
         let head = repo.head()?.peel_to_commit()?;

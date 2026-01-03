@@ -180,9 +180,9 @@ fn test_track_already_tracked_branch() -> Result<()> {
 fn test_empty_stack_log() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
-    // Initialize git repo but don't initialize diamond
+    // Initialize git repo but don't initialize diamond (use -b main for consistency)
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(temp_dir.path())
         .output()?;
 
@@ -470,9 +470,9 @@ fn test_absorb_with_no_staged_changes() -> Result<()> {
 fn test_empty_repository_no_commits() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
-    // Initialize git repo but don't commit anything
+    // Initialize git repo but don't commit anything (use -b main for consistency)
     Command::new("git")
-        .args(["init"])
+        .args(["init", "-b", "main"])
         .current_dir(temp_dir.path())
         .output()?;
 

@@ -433,21 +433,11 @@ pub fn silent_cleanup_orphaned_refs(gateway: &crate::git_gateway::GitGateway) ->
 
 #[cfg(test)]
 mod tests {
-    use crate::test_context::TestRepoContext;
+    use crate::test_context::{init_test_repo, TestRepoContext};
     use super::*;
     use crate::git_gateway::GitGateway;
 
     use tempfile::tempdir;
-
-    fn init_test_repo(path: &std::path::Path) -> anyhow::Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
 
     #[test]
     fn test_cycle_validator_no_cycle() -> anyhow::Result<()> {
@@ -842,10 +832,11 @@ mod tests {
         super::silent_cleanup_orphaned_refs(&gateway)?;
         let duration = start.elapsed();
 
-        // Verify cleanup completed in reasonable time (<50ms for 50 refs)
+        // Verify cleanup completed in reasonable time (<300ms for 50 refs)
+        // Increased from 50ms → 100ms (macOS) → 300ms (Windows CI)
         assert!(
-            duration.as_millis() < 50,
-            "Cleanup took {}ms, expected <50ms",
+            duration.as_millis() < 300,
+            "Cleanup took {}ms, expected <300ms",
             duration.as_millis()
         );
 

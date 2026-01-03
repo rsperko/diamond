@@ -1,0 +1,20 @@
+[alias]
+# Quick test aliases
+t = "nextest run"
+tu = "nextest run --bin dm"
+ti = "nextest run --test '*'"
+
+# Quick quality check alias
+c = "clippy --all-targets --all-features -- -D warnings"
+
+# Full validation (fmt + clippy + tests)
+# Note: cargo doesn't support chained commands in aliases yet
+# Use `just check` for the full workflow instead
+
+# Windows-specific configuration to fix stack overflow issues in CI
+# Windows default stack is 1MB, increase to 8MB to match Unix defaults
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-args=-Wl,--stack,8388608"]

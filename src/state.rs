@@ -86,6 +86,7 @@ impl OperationLock {
     /// Try to acquire the lock file (internal helper)
     fn try_acquire_lock(lock_path: &Path) -> Result<Self> {
         let file = OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
             .truncate(true)
@@ -168,6 +169,28 @@ impl OperationLock {
 
         // Process is dead and lock is old enough - it's stale
         Ok(true)
+    }
+
+    /// Read the content of the lock file (for testing/diagnostics)
+    ///
+    /// This reads from the existing file handle, which works on both Unix and Windows.
+    /// On Windows, opening a new file handle to read an exclusively-locked file fails,
+    /// so we must read from the file handle that holds the lock.
+    #[cfg(test)]
+    pub(crate) fn read_content(&self) -> Result<String> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        // Clone the file handle so we don't affect the original
+        let mut file = self.file.try_clone()?;
+
+        // Seek to beginning of file
+        file.seek(SeekFrom::Start(0))?;
+
+        // Read content
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+
+        Ok(content)
     }
 }
 
@@ -851,11 +874,11 @@ mod tests {
         let root = dir.path();
         fs::create_dir_all(root.join(".git").join("diamond"))?;
 
-        let _lock = OperationLock::acquire_from(root)?;
+        let lock = OperationLock::acquire_from(root)?;
 
-        // Read lock file and verify it contains PID
-        let lock_path = root.join(".git").join("diamond").join("operation.lock");
-        let content = fs::read_to_string(&lock_path)?;
+        // Read lock file content using the file handle we have
+        // (avoids Windows issue where opening a new handle to an exclusively-locked file fails)
+        let content = lock.read_content()?;
         let expected_pid = std::process::id().to_string();
 
         assert!(

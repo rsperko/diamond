@@ -181,17 +181,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo(path: &std::path::Path) -> Result<git2::Repository> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo, TestRepoContext};
 
     fn create_branch(repo: &git2::Repository, name: &str) -> Result<()> {
         let head = repo.head()?.peel_to_commit()?;
@@ -311,6 +301,17 @@ mod tests {
             let tree_id = origin_repo.index()?.write_tree()?;
             let tree = origin_repo.find_tree(tree_id)?;
             origin_repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+            drop(tree);
+
+            // Rename the branch to main for consistency (handle both master and main defaults)
+            {
+                let mut branch = origin_repo
+                    .find_branch("master", git2::BranchType::Local)
+                    .or_else(|_| origin_repo.find_branch("main", git2::BranchType::Local))?;
+                if branch.name()?.unwrap_or("") == "master" {
+                    branch.rename("main", false)?;
+                }
+            } // Drop branch here to release borrow
         }
 
         // Clone to create local repo with proper tracking

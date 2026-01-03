@@ -88,12 +88,10 @@ mod tests {
     use serial_test::serial;
     use tempfile::tempdir;
 
+    use crate::test_context::init_test_repo as init_test_repo_shared;
+
     fn init_test_repo(path: &Path) -> Result<PathBuf> {
-        let repo = git2::Repository::init(path)?;
-        let sig = git2::Signature::now("Test", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(Some("HEAD"), &sig, &sig, "Initial", &tree, &[])?;
+        let repo = init_test_repo_shared(path)?;
         Ok(repo.path().to_path_buf())
     }
 
@@ -153,8 +151,11 @@ mod tests {
         let dir = tempdir()?;
         let git_dir = init_test_repo(dir.path())?;
 
-        // Diamond directory shouldn't exist yet
+        // Remove diamond directory created by init to test that lock creates it
         let diamond_dir = git_dir.join("diamond");
+        if diamond_dir.exists() {
+            std::fs::remove_dir_all(&diamond_dir)?;
+        }
         assert!(!diamond_dir.exists());
 
         // Acquire lock should create it

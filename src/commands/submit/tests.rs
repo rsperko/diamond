@@ -5,9 +5,8 @@ use super::validation::validate_stack_integrity;
 use super::*;
 use crate::forge::{CiStatus, ForgeType, PrFullInfo, PrInfo, PrState, ReviewState};
 use crate::stack_viz::collect_full_stack;
-use crate::test_context::TestRepoContext;
+use crate::test_context::{init_test_repo, TestRepoContext};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::sync::RwLock;
 use tempfile::tempdir;
 
@@ -211,17 +210,6 @@ impl crate::forge::Forge for MockForge {
 }
 
 // Helper to create a minimal test repo
-fn init_test_repo(path: &std::path::Path) -> Result<git2::Repository> {
-    let repo = git2::Repository::init(path)?;
-    let sig = git2::Signature::now("Test User", "test@example.com")?;
-    let tree_id = repo.index()?.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
-    drop(tree);
-    fs::create_dir_all(path.join(".git").join("diamond"))?;
-    Ok(repo)
-}
-
 // Helper to create a git branch at HEAD
 fn create_branch(repo: &git2::Repository, name: &str) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
@@ -997,51 +985,113 @@ fn test_submit_blocks_when_branch_is_behind_remote() -> Result<()> {
     ref_store.set_parent("feature", "main")?;
 
     // Push the feature branch to remote
-    std::process::Command::new("git")
+    let push_feature_output = std::process::Command::new("git")
         .args(["push", "-u", "origin", "feature"])
         .current_dir(local_dir.path())
         .output()?;
+    assert!(
+        push_feature_output.status.success(),
+        "Push feature failed: {}",
+        String::from_utf8_lossy(&push_feature_output.stderr)
+    );
 
     // Simulate remote having a new commit by:
     // 1. Creating a commit in another clone
     // 2. Pushing it
     // 3. Fetching in local
     let clone2_dir = local_dir.path().join("clone2");
-    std::process::Command::new("git")
+    let clone_output = std::process::Command::new("git")
         .args(["clone", remote_dir.path().to_str().unwrap(), "clone2"])
         .current_dir(local_dir.path())
         .output()?;
+    assert!(
+        clone_output.status.success(),
+        "Clone failed: {}",
+        String::from_utf8_lossy(&clone_output.stderr)
+    );
 
-    std::process::Command::new("git")
+    let checkout_output = std::process::Command::new("git")
         .args(["checkout", "feature"])
         .current_dir(&clone2_dir)
         .output()?;
-    std::fs::write(clone2_dir.join("remote_change.txt"), "remote content")?;
+    assert!(
+        checkout_output.status.success(),
+        "Checkout feature failed: {}",
+        String::from_utf8_lossy(&checkout_output.stderr)
+    );
+
+    // Configure git user for clone2 (needed for commit in CI)
     std::process::Command::new("git")
+        .args(["config", "user.name", "Test User"])
+        .current_dir(&clone2_dir)
+        .output()?;
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@example.com"])
+        .current_dir(&clone2_dir)
+        .output()?;
+
+    std::fs::write(clone2_dir.join("remote_change.txt"), "remote content")?;
+
+    let add_output = std::process::Command::new("git")
         .args(["add", "."])
         .current_dir(&clone2_dir)
         .output()?;
-    std::process::Command::new("git")
+    assert!(
+        add_output.status.success(),
+        "Git add failed: {}",
+        String::from_utf8_lossy(&add_output.stderr)
+    );
+
+    let commit_output = std::process::Command::new("git")
         .args(["commit", "-m", "Remote commit"])
         .current_dir(&clone2_dir)
         .output()?;
-    std::process::Command::new("git")
+    assert!(
+        commit_output.status.success(),
+        "Commit failed: {}",
+        String::from_utf8_lossy(&commit_output.stderr)
+    );
+
+    let push_output = std::process::Command::new("git")
         .args(["push"])
         .current_dir(&clone2_dir)
         .output()?;
+    assert!(
+        push_output.status.success(),
+        "Push failed: {}",
+        String::from_utf8_lossy(&push_output.stderr)
+    );
 
     // Fetch in local repo to see the remote changes
-    std::process::Command::new("git")
+    let fetch_output = std::process::Command::new("git")
         .args(["fetch", "origin"])
         .current_dir(local_dir.path())
         .output()?;
+    assert!(
+        fetch_output.status.success(),
+        "Fetch failed: {}",
+        String::from_utf8_lossy(&fetch_output.stderr)
+    );
 
     // Verify divergence - feature should be behind
     let sync_state = gateway.check_remote_sync("feature")?;
+
+    // Debug: Check what git thinks about the branches
+    let status_output = std::process::Command::new("git")
+        .args(["status", "-sb"])
+        .current_dir(local_dir.path())
+        .output()?;
+    let log_output = std::process::Command::new("git")
+        .args(["log", "--oneline", "--all", "-5"])
+        .current_dir(local_dir.path())
+        .output()?;
+
     assert_eq!(
         sync_state,
         crate::git_gateway::BranchSyncState::Behind(1),
-        "Feature should be behind remote"
+        "Feature should be behind remote.\nGit status: {}\nGit log: {}",
+        String::from_utf8_lossy(&status_output.stdout),
+        String::from_utf8_lossy(&log_output.stdout)
     );
 
     // Mock forge for submit

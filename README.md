@@ -7,6 +7,8 @@ Diamond is a lightning-fast CLI for stacked pull requests—the workflow used at
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![CI](https://github.com/rsperko/diamond/workflows/CI/badge.svg)](https://github.com/rsperko/diamond/actions)
 
+> **⚠️ Alpha Software:** Diamond is in active development. Works well, but expect rough edges. Please [report issues](https://github.com/rsperko/diamond/issues)!
+
 ---
 
 ## The Problem
@@ -35,7 +37,12 @@ Stacked pull requests let you build Feature B *on top of* Feature A—before Fea
 
 **Prerequisites:** Rust 1.82+
 
-**Install from GitHub:**
+**Install from crates.io (recommended):**
+```bash
+cargo install diamond-cli
+```
+
+**Or install latest from GitHub:**
 ```bash
 cargo install --git https://github.com/rsperko/diamond
 ```
@@ -51,8 +58,6 @@ cargo install --path .
 ```bash
 dm --help
 ```
-
-> **Note:** Diamond is in early development. Crates.io release coming soon!
 
 **For GitHub:** Install the [GitHub CLI](https://cli.github.com/) (`gh`) and authenticate:
 ```bash
@@ -421,13 +426,12 @@ git clone https://github.com/rsperko/diamond.git
 cd diamond
 cargo build
 cargo test                 # 206+ tests, ~90% coverage
-cargo test                 # 206+ tests, ~90% coverage
 cargo clippy -- -D warnings
-make setup-hooks           # Configure git hooks (Gitleaks)
+just setup-hooks           # Configure git hooks (Gitleaks)
 
 **Security:**
 This project uses [Gitleaks](https://github.com/gitleaks/gitleaks) to prevent secrets from being committed.
-Run `make setup-hooks` to install the pre-commit hook that checks for secrets.
+Run `just setup-hooks` to install the pre-commit hook that checks for secrets.
 
 **Architecture:**
 - `src/main.rs` – CLI parsing (clap)

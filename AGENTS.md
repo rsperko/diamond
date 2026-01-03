@@ -11,7 +11,7 @@
 **ABSOLUTE RULE: When fixing bugs, reproducing issues, or testing changes, YOU MUST NOT COMMIT TO OR MODIFY THE DIAMOND REPOSITORY DIRECTLY.**
 
 - **NEVER** run `git commit`, `git rebase`, or `dm` commands on the Diamond repository itself to test things.
-- **ALWAYS** use `make playground` or `cd sandbox/` to reproduce bugs and verify fixes.
+- **ALWAYS** use `just playground` or `cd sandbox/` to reproduce bugs and verify fixes.
 - **EXCEPTION**: You may modify source code (`src/`) and tests (`tests/`) as part of the fix, but you must NOT use the repository's git history as your testbed.
 - Modifying the tool you are building while it is running on itself is dangerous and leads to repository corruption.
 
@@ -77,7 +77,7 @@ fn test_something() -> Result<()> {
     - `cargo test --lib commands::sync`
     - `cargo test --test integration_tests -- test_sync_basic`
 - **Handoff Protocol**: When you are confident, **ask the user** to run the full suite:
-    > "I have verified my changes with specific tests. Please run `make test` to ensure no regressions."
+    > "I have verified my changes with specific tests. Please run `just test` (or `cargo t`) to ensure no regressions."
 
 ### 4. 🔴 TDD Enforcement (Red-Green-Refactor)
 **MANDATORY WORKFLOW - Do not skip steps:**
@@ -106,10 +106,10 @@ fn test_something() -> Result<()> {
 ## Build, Test, and Development Commands
 
 ### Quick Reference
-- `make help`: Show all available make targets
-- `make test`: Run all tests (unit + integration)
-- `make check`: Run fmt + clippy + tests (pre-commit validation)
-- `make playground`: Create isolated test repo for manual testing (**USE THIS, NOT THE REAL REPO**)
+- `just`: Show all available commands
+- `just test` or `cargo t`: Run all tests (unit + integration)
+- `just check`: Run fmt + clippy + tests (pre-commit validation)
+- `just playground`: Create isolated test repo for manual testing (**USE THIS, NOT THE REAL REPO**)
 - `cargo build`: Compile a debug build
 - `cargo run -- --help`: Run the CLI and show available subcommands
 - `cargo run -- log`: Launch the TUI stack view (`ratatui`/`crossterm`)
@@ -125,7 +125,7 @@ This project provides safe, isolated environments for testing:
 #### 1. Automated Integration Tests (`tests/`)
 - All integration tests run in temporary directories that auto-cleanup
 - Tests spawn the actual `dm` binary for end-to-end validation
-- Run with: `make test-integration` or `cargo test --test '*'`
+- Run with: `just test-integration` or `cargo ti` or `cargo test --test '*'`
 - **Structure**:
   - `basic_tests.rs`: Core command functionality
   - `stack_ops_tests.rs`: Complex stack manipulations
@@ -135,7 +135,7 @@ This project provides safe, isolated environments for testing:
 
 #### 2. Manual Testing Playground (`sandbox/`)
 ```bash
-make playground          # Creates sandbox/test-repo with git initialized
+just playground          # Creates sandbox/test-repo with git initialized
 cd sandbox/test-repo    # Enter the test environment
 ../../target/debug/dm create my-feature  # Test commands safely
 ```
@@ -191,7 +191,7 @@ if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
 - ❌ Tests hang forever waiting for input that never comes
 - ❌ CI/CD pipelines timeout or fail mysteriously
 - ❌ Scripts/automation break without clear error messages
-- ❌ `make test` takes 2+ minutes instead of seconds
+- ❌ Test suite takes 2+ minutes instead of seconds
 
 **With TTY detection:**
 - ✅ Tests complete immediately with clear pass/fail
@@ -393,12 +393,12 @@ fn test_duplicate_branch_fails() -> Result<()> {
 - [ ] Test all error conditions
 - [ ] Test edge cases (empty, null, corrupted, missing)
 - [ ] Verify state consistency after operations
-- [ ] Manual verification in playground: `make playground` then test the feature
-- [ ] Run `make test` - all tests must pass (unit + integration)
+- [ ] Manual verification in playground: `just playground` then test the feature
+- [ ] Run `just test` or `cargo t` - all tests must pass (unit + integration)
 - [ ] Run `cargo clippy -- -D warnings` - zero warnings
 - [ ] Coverage: Aim for 90%+ of new code paths
 
-**NEVER manually test features in the Diamond repository - always use `make playground`**
+**NEVER manually test features in the Diamond repository - always use `just playground`**
 
 ### Consequences of Insufficient Testing
 
@@ -428,7 +428,7 @@ fn test_duplicate_branch_fails() -> Result<()> {
 
 **All tests must pass with zero warnings:**
 ```bash
-$ make test
+$ just test  # or: cargo t
 $ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
@@ -446,12 +446,12 @@ $ cargo clippy --all-targets --all-features -- -D warnings
 ## 🧪 Testing Reminder
 
 **Before testing any feature manually:**
-1. Run `make playground` to create an isolated test environment
+1. Run `just playground` to create an isolated test environment
 2. Navigate to `sandbox/test-repo/`
 3. Test your feature there, not in the Diamond repository
 
 **Before committing code:**
-1. Run `make check` to validate formatting, linting, and all tests
+1. Run `just check` to validate formatting, linting, and all tests
 2. Ensure all 206 tests pass (200 unit + 6 integration)
 3. Add integration tests for new user-facing features in `tests/integration_test.rs`
 
@@ -460,7 +460,7 @@ $ cargo clippy --all-targets --all-features -- -D warnings
 When using the `qa-tester` agent on this project, these are the Diamond-specific testing concerns:
 
 ### Environment Setup
-- **Always** run `make playground` first to create an isolated test environment
+- **Always** run `just playground` first to create an isolated test environment
 - Work in `sandbox/test-repo/`, **never** the main Diamond repository
 - Use `../../target/debug/dm` or `../../target/release/dm` to run the CLI
 

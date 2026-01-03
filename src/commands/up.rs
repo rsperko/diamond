@@ -119,31 +119,9 @@ fn is_descendant(ref_store: &RefStore, branch: &str, ancestor: &str) -> Result<b
 mod tests {
     use super::*;
     use crate::git_gateway::GitGateway;
-    use git2::Repository;
-
-    use std::path::Path;
     use tempfile::tempdir;
 
-    use crate::test_context::TestRepoContext;
-
-    fn init_test_repo_with_branch(path: &Path, branch_name: &str) -> Result<Repository> {
-        let repo = Repository::init(path)?;
-
-        let mut config = repo.config()?;
-        config.set_str("init.defaultBranch", branch_name)?;
-
-        let sig = git2::Signature::now("Test User", "test@example.com")?;
-        let tree_id = repo.index()?.write_tree()?;
-        let tree = repo.find_tree(tree_id)?;
-
-        let refname = format!("refs/heads/{}", branch_name);
-        repo.commit(Some(&refname), &sig, &sig, "Initial commit", &tree, &[])?;
-        drop(tree);
-
-        repo.set_head(&refname)?;
-
-        Ok(repo)
-    }
+    use crate::test_context::{init_test_repo_with_branch, TestRepoContext};
 
     #[test]
     fn test_up_single_child() -> Result<()> {

@@ -27,6 +27,9 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+use anyhow::Result;
+
 thread_local! {
     /// Thread-local storage for the test repository path.
     /// This is only accessed during tests and allows parallel test execution.
@@ -67,6 +70,83 @@ impl Drop for TestRepoContext {
 /// when running in test mode to use the test repository instead of the CWD.
 pub(crate) fn test_repo_path() -> Option<PathBuf> {
     TEST_REPO_PATH.with(|p| p.borrow().clone())
+}
+
+/// Initialize a test repository with consistent "main" branch naming.
+///
+/// This is a shared helper for all unit tests to avoid code duplication.
+/// Creates a git repository with an initial commit on the "main" branch,
+/// ensuring consistency across all platforms (CI defaults to "master" without this).
+///
+/// Also creates the `.git/diamond/` directory for Diamond metadata.
+#[cfg(test)]
+pub fn init_test_repo(path: &Path) -> Result<git2::Repository> {
+    use std::fs;
+
+    // Initialize with explicit branch name for consistency across environments
+    let repo = git2::Repository::init(path)?;
+
+    // Configure git user for the test repo (needed for commits in CI)
+    // This ensures any subsequent commits in tests will succeed
+    let mut config = repo.config()?;
+    config.set_str("user.name", "Test User")?;
+    config.set_str("user.email", "test@example.com")?;
+    drop(config); // Release borrow before commit
+
+    // Create initial commit on main branch
+    let sig = git2::Signature::now("Test User", "test@example.com")?;
+    let tree_id = repo.index()?.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+    drop(tree);
+
+    // Rename the branch to main for consistency (handle both master and main defaults)
+    {
+        let mut branch = repo
+            .find_branch("master", git2::BranchType::Local)
+            .or_else(|_| repo.find_branch("main", git2::BranchType::Local))?;
+        if branch.name()?.unwrap_or("") == "master" {
+            branch.rename("main", false)?;
+        }
+    } // Drop branch here to release borrow
+
+    // Create Diamond metadata directory
+    fs::create_dir_all(path.join(".git").join("diamond"))?;
+
+    Ok(repo)
+}
+
+/// Initialize a test repository with a custom branch name.
+///
+/// This is useful for tests that need to verify behavior with non-standard branch names
+/// (e.g., testing `dm init` on repos with branches other than "main").
+#[cfg(test)]
+pub fn init_test_repo_with_branch(path: &Path, branch_name: &str) -> Result<git2::Repository> {
+    use std::fs;
+
+    let repo = git2::Repository::init(path)?;
+
+    // Configure git user (needed for commits in CI)
+    let mut config = repo.config()?;
+    config.set_str("user.name", "Test User")?;
+    config.set_str("user.email", "test@example.com")?;
+    config.set_str("init.defaultBranch", branch_name)?;
+    drop(config);
+
+    let sig = git2::Signature::now("Test User", "test@example.com")?;
+    let tree_id = repo.index()?.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+
+    let refname = format!("refs/heads/{}", branch_name);
+    repo.commit(Some(&refname), &sig, &sig, "Initial commit", &tree, &[])?;
+    drop(tree);
+
+    repo.set_head(&refname)?;
+
+    // Create Diamond metadata directory
+    fs::create_dir_all(path.join(".git").join("diamond"))?;
+
+    Ok(repo)
 }
 
 #[cfg(test)]

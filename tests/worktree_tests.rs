@@ -215,7 +215,12 @@ fn test_doctor_with_worktrees() -> Result<()> {
 
     // Delete feature-1 branch via git (breaking the worktree)
     // This creates an orphaned tracking ref
-    run_git(main_dir.path(), &["branch", "-D", "feature-1"])?;
+    // Note: git branch -D refuses to delete branches in worktrees, so we force it via update-ref
+    let delete_result = run_git(main_dir.path(), &["branch", "-D", "feature-1"])?;
+    if !delete_result.status.success() {
+        // Branch is in a worktree, force delete via update-ref
+        run_git(main_dir.path(), &["update-ref", "-d", "refs/heads/feature-1"])?;
+    }
 
     // Doctor should detect the issue
     let output = run_dm(main_dir.path(), &["doctor"])?;
@@ -227,7 +232,8 @@ fn test_doctor_with_worktrees() -> Result<()> {
 
     assert!(
         combined.contains("feature-1"),
-        "Doctor should detect orphaned tracking for feature-1"
+        "Doctor should detect orphaned tracking for feature-1. Output: {}",
+        combined
     );
 
     // Doctor --fix should clean up

@@ -477,29 +477,7 @@ mod tests {
     }
 
     fn init_test_repo(path: &Path) {
-        Command::new("git")
-            .args(["init"])
-            .current_dir(path)
-            .output()
-            .expect("git init failed");
-
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(path)
-            .output()
-            .expect("git config user.name failed");
-
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(path)
-            .output()
-            .expect("git config user.email failed");
-
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "Initial"])
-            .current_dir(path)
-            .output()
-            .expect("git commit failed");
+        crate::test_context::init_test_repo(path).expect("Failed to initialize test repo");
     }
 
     #[test]
