@@ -1,8 +1,14 @@
 [package]
-name = "diamond"
+name = "diamond-cli"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+description = "Lightning-fast CLI for stacked pull requests"
+repository = "https://github.com/rsperko/diamond"
+homepage = "https://github.com/rsperko/diamond"
+readme = "README.md"
+keywords = ["git", "cli", "pr", "code-review", "workflow"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "dm"

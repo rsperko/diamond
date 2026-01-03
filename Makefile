@@ -17,6 +17,7 @@ help:
 	@echo "  make check          - Run fmt + clippy + tests"
 	@echo "  make install        - Install dm binary to ~/.cargo/bin"
 	@echo "  make clean          - Clean build artifacts and sandbox"
+	@echo "  make setup-hooks    - Install git hooks for quality checks"
 
 # Build targets
 build:
@@ -57,6 +58,17 @@ clean:
 	cargo clean
 	rm -rf sandbox/
 	rm -rf target/nextest/
+
+# Setup git hooks
+setup-hooks:
+	@echo "Setting up git hooks..."
+	git config core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@echo "✓ Git hooks configured"
+	@echo ""
+	@echo "Pre-commit checks enabled:"
+	@echo "  • Gitleaks (secret detection)"
+	@echo "  • Test signature blocking"
 
 # Playground for manual testing
 playground:

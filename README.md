@@ -5,6 +5,7 @@
 Diamond is a lightning-fast CLI for stacked pull requests—the workflow used at Meta, Google, and top engineering teams to ship code 4x faster.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![CI](https://github.com/rsperko/diamond/workflows/CI/badge.svg)](https://github.com/rsperko/diamond/actions)
 
 ---
 
@@ -34,7 +35,12 @@ Stacked pull requests let you build Feature B *on top of* Feature A—before Fea
 
 **Prerequisites:** Rust 1.82+
 
-**From source:**
+**Install from GitHub:**
+```bash
+cargo install --git https://github.com/rsperko/diamond
+```
+
+**Or build from source:**
 ```bash
 git clone https://github.com/rsperko/diamond.git
 cd diamond
@@ -45,6 +51,8 @@ cargo install --path .
 ```bash
 dm --help
 ```
+
+> **Note:** Diamond is in early development. Crates.io release coming soon!
 
 **For GitHub:** Install the [GitHub CLI](https://cli.github.com/) (`gh`) and authenticate:
 ```bash

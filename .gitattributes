@@ -1,0 +1,7 @@
+# Line ending normalization
+* text=auto eol=lf
+
+# Ensure consistent line endings for text files
+*.{rs,toml,md,yml,yaml,json} text eol=lf
+*.sh text eol=lf
+.git* text eol=lf

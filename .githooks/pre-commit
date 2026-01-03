@@ -1,28 +1,25 @@
 #!/bin/sh
 #
-# Pre-commit hook to run Gitleaks protection
+# Pre-commit hook for Diamond
 #
-# This script ensures that no secrets are committed to the repository.
-# It requires 'gitleaks' to be installed and available in the PATH.
+# This script runs multiple checks before allowing a commit:
+# 1. Gitleaks - Ensures no secrets are committed
+# 2. Test signature blocking - Prevents unit test code from being committed
 
+FAILED=0
+
+# Check 1: Gitleaks protection
 command -v gitleaks >/dev/null 2>&1 || {
     echo "Error: gitleaks is not installed or not in the PATH."
     echo "Please install it (e.g., 'brew install gitleaks') to commit changes."
     exit 1
 }
 
-# Run gitleaks protect
-# --staged: Only scan staged changes
-# --redact: Redact secrets in output
-# --verbose: Show detailed report
 echo "Running gitleaks protection..."
 gitleaks protect --staged --redact --verbose
 
-# Capture the exit code
-STATUS=$?
-
-if [ $STATUS -eq 0 ]; then
-    echo "Gitleaks check passed."
+if [ $? -eq 0 ]; then
+    echo "✓ Gitleaks check passed."
 else
     echo "
     ______________________________________________________________________
@@ -36,6 +33,25 @@ else
   |  # gitleaks:allow                                                    |
    \\______________________________________________________________________/
     "
+    FAILED=1
 fi
 
-exit $STATUS
+# Check 2: Test user commits (prevent unit test accidents)
+if git diff --cached --name-only | grep -q '\.rs$'; then
+    if git diff --cached | grep -E '^\+.*Test User|test@example\.com' >/dev/null 2>&1; then
+        echo ""
+        echo "❌ Error: Detected test user signature in staged changes"
+        echo ""
+        echo "   Found 'Test User' or 'test@example.com' in your commit."
+        echo "   This looks like test code that should not be committed."
+        echo ""
+        echo "   Please review your changes and ensure you're not committing"
+        echo "   test fixtures, temporary test code, or debugging changes."
+        echo ""
+        FAILED=1
+    else
+        echo "✓ Test signature check passed."
+    fi
+fi
+
+exit $FAILED
