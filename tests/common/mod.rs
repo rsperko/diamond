@@ -66,6 +66,24 @@ pub fn run_dm(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
         .output()?)
 }
 
+/// Helper to run dm command and assert it succeeds, returning output
+#[allow(dead_code)]
+pub fn run_dm_success(dir: &Path, args: &[&str]) -> Result<std::process::Output> {
+    let output = run_dm(dir, args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        anyhow::bail!(
+            "dm {:?} failed with status {:?}\nstdout: {}\nstderr: {}",
+            args,
+            output.status.code(),
+            stdout,
+            stderr
+        );
+    }
+    Ok(output)
+}
+
 /// Helper to get current git branch
 #[allow(dead_code)]
 pub fn get_current_branch(dir: &Path) -> Result<String> {

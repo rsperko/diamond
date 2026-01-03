@@ -332,11 +332,27 @@ fn test_branch_tracked_but_git_branch_deleted() -> Result<()> {
 
     // Create proper stack
     fs::write(temp_dir.path().join("f.txt"), "f")?;
-    run_dm(temp_dir.path(), &["create", "feature", "-a", "-m", "Feature"])?;
+    run_dm_success(temp_dir.path(), &["create", "feature", "-a", "-m", "Feature"])?;
+
+    // Verify the parent ref was created
+    assert!(
+        is_branch_tracked_in_refs(temp_dir.path(), "feature")?,
+        "feature branch should be tracked after dm create"
+    );
 
     // Go back to main and delete the git branch (but refs still exist)
-    run_dm(temp_dir.path(), &["checkout", "main"])?;
+    run_dm_success(temp_dir.path(), &["checkout", "main"])?;
     run_git(temp_dir.path(), &["branch", "-D", "feature"])?;
+
+    // Verify ref still exists but git branch doesn't
+    assert!(
+        is_branch_tracked_in_refs(temp_dir.path(), "feature")?,
+        "feature should still be tracked in refs after git branch -D"
+    );
+    assert!(
+        !git_branch_exists(temp_dir.path(), "feature")?,
+        "feature git branch should be deleted"
+    );
 
     // Doctor should detect the issue - branch is tracked but doesn't exist in git
     let output = run_dm(temp_dir.path(), &["doctor"])?;
@@ -1113,9 +1129,15 @@ fn test_cleanup_without_force_requires_tty() -> Result<()> {
 
     // Create a branch and merge it
     fs::write(temp_dir.path().join("feature.txt"), "feature")?;
-    run_dm(temp_dir.path(), &["create", "feature", "-a", "-m", "Feature"])?;
+    run_dm_success(temp_dir.path(), &["create", "feature", "-a", "-m", "Feature"])?;
 
-    // Merge the branch
+    // Verify branch is tracked
+    assert!(
+        is_branch_tracked_in_refs(temp_dir.path(), "feature")?,
+        "feature should be tracked after creation"
+    );
+
+    // Merge the branch into main
     run_git(temp_dir.path(), &["checkout", "main"])?;
     run_git(temp_dir.path(), &["merge", "feature", "--no-ff", "-m", "Merge feature"])?;
 
@@ -1125,7 +1147,10 @@ fn test_cleanup_without_force_requires_tty() -> Result<()> {
     // Should fail because stdin is not a TTY
     assert!(
         !output.status.success(),
-        "cleanup without --force should fail in non-TTY environment"
+        "cleanup without --force should fail in non-TTY environment.\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
 
     // Error message should mention --force
