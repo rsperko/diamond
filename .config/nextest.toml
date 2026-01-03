@@ -1,0 +1,33 @@
+# Diamond nextest configuration
+# Documentation: https://nexte.st/book/configuration.html
+
+[store]
+dir = "target/nextest"
+
+[profile.default]
+# 30s default timeout for unit tests
+# Unit tests create temp repos and run git operations
+slow-timeout = { period = "30s", terminate-after = 2 }
+
+# Retry failed tests once (helps catch transient git/filesystem issues)
+retries = 1
+
+# Fail-fast during development
+fail-fast = true
+
+# Test output settings
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "pass"
+
+[profile.ci]
+# CI profile with stricter settings
+slow-timeout = { period = "60s", terminate-after = 2 }
+retries = 2
+fail-fast = false
+failure-output = "final"
+
+# Integration tests get more time (spawn dm binary, complex git operations)
+[[profile.default.overrides]]
+filter = "package(diamond) & kind(test)"
+slow-timeout = { period = "60s", terminate-after = 2 }

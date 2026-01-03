@@ -1,0 +1,435 @@
+use crate::branch_tree::{build_branch_tree, find_current_branch_index, format_indent, MARKER_CURRENT, MARKER_OTHER};
+use crate::git_gateway::GitGateway;
+use crate::program_name::program_name;
+use crate::ref_store::RefStore;
+use anyhow::Result;
+use ratatui::{
+    backend::CrosstermBackend,
+    crossterm::{
+        event::{self, Event, KeyCode, KeyEventKind},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    },
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    Terminal,
+};
+use std::io;
+
+/// Checkout a branch
+///
+/// Flags:
+/// - `name`: Specific branch name to checkout
+/// - `trunk`: Go directly to trunk branch
+/// - `stack`: Show only current stack branches (TUI mode)
+/// - `all`: Show all trunks in selection (TUI mode)
+/// - `untracked`: Include untracked branches (TUI mode)
+pub fn run(
+    name: Option<String>,
+    trunk: bool,
+    _stack: bool,     // TODO: implement stack filter for TUI
+    _all: bool,       // TODO: implement all-trunks filter for TUI
+    _untracked: bool, // TODO: implement untracked filter for TUI
+) -> Result<()> {
+    // Silent cleanup of orphaned refs before checkout
+    let gateway = GitGateway::new()?;
+    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {
+        // Non-fatal: if cleanup fails, still proceed with checkout
+    }
+
+    let ref_store = RefStore::new()?;
+
+    // --trunk flag: go directly to trunk
+    if trunk {
+        let trunk_branch = ref_store.require_trunk()?;
+        gateway.checkout_branch_safe(&trunk_branch)?;
+        println!("Checked out trunk '{}'", trunk_branch);
+        return Ok(());
+    }
+
+    // Non-interactive mode with explicit branch name
+    if let Some(target) = name {
+        // Use safe checkout that respects uncommitted changes
+        gateway.checkout_branch_safe(&target)?;
+
+        // Fetch diamond ref for this branch from remote (best effort)
+        // This enables collaboration - we get the parent relationship from remote
+        let _ = gateway.fetch_diamond_ref_for_branch(&target);
+
+        println!("Checked out '{}'", target);
+        return Ok(());
+    }
+
+    // Check if stdout is a TTY before launching TUI
+    if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        anyhow::bail!(
+            "checkout requires a branch name when running non-interactively. Usage: {} checkout <branch>",
+            program_name()
+        );
+    }
+
+    // Interactive TUI mode
+    let current_branch = gateway.get_current_branch_name().unwrap_or_default();
+    let selected = run_tui(&ref_store, &current_branch, &gateway)?;
+
+    if let Some(target) = selected {
+        println!("Selected: {}", target);
+        // Use safe checkout that respects uncommitted changes
+        gateway.checkout_branch_safe(&target)?;
+
+        // Fetch diamond ref for this branch from remote (best effort)
+        let _ = gateway.fetch_diamond_ref_for_branch(&target);
+    }
+
+    Ok(())
+}
+
+fn run_tui(ref_store: &RefStore, current_branch: &str, gateway: &GitGateway) -> Result<Option<String>> {
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let res = run_app(&mut terminal, ref_store, current_branch, gateway);
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+
+    res
+}
+
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ref_store: &RefStore,
+    current_branch: &str,
+    gateway: &GitGateway,
+) -> Result<Option<String>> {
+    // Build tree view using shared branch_tree module (stack order: trunk at bottom)
+    let rows = build_branch_tree(ref_store, current_branch, gateway)?;
+
+    // Handle empty list
+    if rows.is_empty() {
+        anyhow::bail!(
+            "No branches tracked. Use '{} track' to start tracking branches.",
+            program_name()
+        );
+    }
+
+    let mut state = ListState::default();
+    // Start with current branch selected (consistent with dm log)
+    let current_idx = find_current_branch_index(&rows);
+    state.select(Some(current_idx));
+
+    loop {
+        terminal.draw(|f| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
+                .split(f.area());
+
+            let items: Vec<ListItem> = rows
+                .iter()
+                .map(|branch| {
+                    // Build display line with tree indentation (consistent with dm log)
+                    let indent = format_indent(branch.depth);
+                    let marker = if branch.is_current {
+                        MARKER_CURRENT
+                    } else {
+                        MARKER_OTHER
+                    };
+                    let restack_indicator = if branch.needs_restack { " (needs restack)" } else { "" };
+
+                    let display = format!("{}{} {}{}", indent, marker, branch.name, restack_indicator);
+
+                    // Style: current branch in green, needs restack in yellow
+                    let style = if branch.is_current {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else if branch.needs_restack {
+                        Style::default().fg(Color::Yellow)
+                    } else {
+                        Style::default()
+                    };
+
+                    ListItem::new(Line::from(vec![Span::styled(display, style)]))
+                })
+                .collect();
+
+            let list = List::new(items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Select Branch to Checkout ")
+                        .title_style(Style::default().add_modifier(Modifier::BOLD)),
+                )
+                .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+                .highlight_symbol("▶ ");
+
+            f.render_stateful_widget(list, chunks[0], &mut state);
+            let help = Paragraph::new("Enter: Select | q: Quit | j/k: Navigate | g/G: Top/Bottom")
+                .block(Block::default().borders(Borders::ALL));
+            f.render_widget(help, chunks[1]);
+        })?;
+
+        if let Event::Key(key) = event::read()? {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+                    KeyCode::Enter => {
+                        if let Some(i) = state.selected() {
+                            if i < rows.len() {
+                                return Ok(Some(rows[i].name.clone()));
+                            }
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        let i = match state.selected() {
+                            Some(i) => {
+                                if i >= rows.len() - 1 {
+                                    0
+                                } else {
+                                    i + 1
+                                }
+                            }
+                            None => 0,
+                        };
+                        state.select(Some(i));
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        let i = match state.selected() {
+                            Some(i) => {
+                                if i == 0 {
+                                    rows.len() - 1
+                                } else {
+                                    i - 1
+                                }
+                            }
+                            None => 0,
+                        };
+                        state.select(Some(i));
+                    }
+                    // Jump to top (consistent with dm log)
+                    KeyCode::Char('g') | KeyCode::Home => {
+                        state.select(Some(0));
+                    }
+                    // Jump to bottom (consistent with dm log)
+                    KeyCode::Char('G') | KeyCode::End => {
+                        state.select(Some(rows.len().saturating_sub(1)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git_gateway::GitGateway;
+    use anyhow::Result;
+    use git2::Repository;
+
+    use tempfile::tempdir;
+
+    use crate::test_context::TestRepoContext;
+
+    fn init_test_repo(path: &std::path::Path) -> Result<Repository> {
+        let repo = Repository::init(path)?;
+        let sig = git2::Signature::now("Test User", "test@example.com")?;
+        let tree_id = repo.index()?.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])?;
+        drop(tree);
+        Ok(repo)
+    }
+
+    #[test]
+    fn test_checkout_existing_branch() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+
+        // Create branches using git directly
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch("feature-1", &commit, false)?;
+        repo.branch("feature-2", &commit, false)?;
+
+        // Checkout feature-1
+        run(Some("feature-1".to_string()), false, false, false, false)?;
+
+        // Verify we're on feature-1
+        assert_eq!(gateway.get_current_branch_name()?, "feature-1");
+
+        // Checkout feature-2
+        run(Some("feature-2".to_string()), false, false, false, false)?;
+
+        // Verify we're on feature-2
+        assert_eq!(gateway.get_current_branch_name()?, "feature-2");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_nonexistent_branch_fails() -> Result<()> {
+        let dir = tempdir()?;
+        let _repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        // Try to checkout branch that doesn't exist
+        let result = run(Some("does-not-exist".to_string()), false, false, false, false);
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_same_branch_twice() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+
+        // Create branch
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch("feature", &commit, false)?;
+
+        // Checkout once
+        run(Some("feature".to_string()), false, false, false, false)?;
+        assert_eq!(gateway.get_current_branch_name()?, "feature");
+
+        // Checkout again - should work (idempotent)
+        run(Some("feature".to_string()), false, false, false, false)?;
+        assert_eq!(gateway.get_current_branch_name()?, "feature");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_with_empty_name() -> Result<()> {
+        let dir = tempdir()?;
+        let _repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        // Empty string should fail
+        let result = run(Some("".to_string()), false, false, false, false);
+        assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_trunk_flag() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+        let ref_store = RefStore::new()?;
+
+        // Initialize with trunk
+        ref_store.set_trunk("main")?;
+
+        // Create and checkout a feature branch
+        let head = repo.head()?;
+        let commit = head.peel_to_commit()?;
+        repo.branch("feature", &commit, false)?;
+        gateway.checkout_branch("feature")?;
+
+        // Use --trunk flag to go back to trunk
+        run(None, true, false, false, false)?;
+
+        // Verify we're on trunk
+        assert_eq!(gateway.get_current_branch_name()?, "main");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_trunk_flag_fails_if_not_initialized() -> Result<()> {
+        let dir = tempdir()?;
+        let _repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        // Don't initialize Diamond (no trunk set)
+
+        // Try --trunk - should fail
+        let result = run(None, true, false, false, false);
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("init") || err_msg.contains("trunk"),
+            "Expected error about initialization, got: {}",
+            err_msg
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_checkout_with_dirty_tree_fails() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        // Create a file and commit it
+        let file_path = dir.path().join("tracked.txt");
+        std::fs::write(&file_path, "original content")?;
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("tracked.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent = repo.head()?.peel_to_commit()?;
+        let sig = git2::Signature::now("Test", "test@test.com")?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Add file", &tree, &[&parent])?;
+
+        // Create a branch with different content
+        let head = repo.head()?.peel_to_commit()?;
+        repo.branch("feature", &head, false)?;
+
+        // Modify file content on feature branch
+        let obj = repo.revparse_single("feature")?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head("refs/heads/feature")?;
+        std::fs::write(&file_path, "feature content")?;
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("tracked.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent = repo.head()?.peel_to_commit()?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Change file", &tree, &[&parent])?;
+
+        // Go back to main
+        let obj = repo.revparse_single("main")?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head("refs/heads/main")?;
+
+        // Create dirty working tree (modify the file without committing)
+        std::fs::write(&file_path, "dirty content")?;
+
+        // Try to checkout feature - should fail due to dirty tree
+        let result = run(Some("feature".to_string()), false, false, false, false);
+        assert!(result.is_err(), "Checkout should fail with dirty tree");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("uncommitted changes"),
+            "Error should mention uncommitted changes: {}",
+            err_msg
+        );
+
+        Ok(())
+    }
+}

@@ -1,0 +1,33 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock
+
+# System/OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Editors/IDE
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+.idea/
+*.swp
+*.swo
+
+# AI Tooling
+.claude/
+.cursor/
+.gemini/
+scaffolding/
+agent_notes/
+CLAUDE.local.md
+
+# Testing/Development
+sandbox/
+ignored_dir/

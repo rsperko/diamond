@@ -1,0 +1,44 @@
+[package]
+name = "diamond"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dm"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+ratatui = "0.30"
+git2 = "0.20"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.9"
+colored = "3"
+anyhow = "1.0"
+thiserror = "2.0"
+dirs = "6.0"
+fs2 = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+open = "5"
+ctrlc = "3.4"
+sha2 = "0.10"
+regex = "1"
+git-absorb = "0.8"
+indicatif = "0.18"
+console = "0.16"
+dialoguer = "0.12"
+slog = "2.5"
+slog-term = "2.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process"] }
+async-trait = "0.1"
+futures = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.23.0"
+serial_test = "3.2"
+
