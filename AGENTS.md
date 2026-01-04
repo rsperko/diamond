@@ -434,6 +434,18 @@ $ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Commit & Pull Request Guidelines
 
+### ⚠️ Protected Branch Workflow
+
+**Main branch is protected on GitHub.** Direct commits are blocked.
+
+All changes must go through pull requests:
+1. Create feature branch: `git checkout -b feature/your-feature`
+2. Commit using conventional commits (`feat:`, `fix:`, `docs:`, etc.)
+3. Push and open PR for review
+4. **Never** commit directly to `main` or force-push to protected branches
+
+### General Guidelines
+
 - Git history is not established yet; use Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`) with an imperative subject.
 - PRs should include: what/why, repro or verification steps, and (for TUI changes) a screenshot or short recording.
 - Required before merge: `cargo fmt`, `cargo clippy ... -D warnings`, and `cargo test` passing locally.
