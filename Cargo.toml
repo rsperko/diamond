@@ -1,6 +1,6 @@
 [package]
 name = "diamond-cli"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Lightning-fast CLI for stacked pull requests"
