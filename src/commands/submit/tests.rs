@@ -2671,3 +2671,70 @@ fn test_multiple_diverged_ancestors_pushed_in_order() -> Result<()> {
 
     Ok(())
 }
+
+// ===== PR Title Generation Tests =====
+
+#[test]
+fn test_pr_title_uses_commit_message_not_branch_name() -> Result<()> {
+    let dir = tempdir()?;
+    let _repo = init_test_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
+
+    let gateway = crate::git_gateway::GitGateway::new()?;
+
+    // Create branch with date-prefixed name
+    gateway.create_branch("01-04-add-fastlane-support")?;
+    gateway.checkout_branch("01-04-add-fastlane-support")?;
+
+    // Make a commit with a nice title
+    std::fs::write(dir.path().join("file.txt"), "content")?;
+    gateway.stage_all()?;
+    gateway.commit("Add fastlane support")?;
+
+    // Get PR title (function we'll create)
+    let title = submission::get_pr_title_for_branch(&gateway, "01-04-add-fastlane-support")?;
+
+    // Should use commit message, not branch name
+    assert_eq!(title, "Add fastlane support");
+    assert_ne!(title, "01 04 add fastlane support");
+
+    Ok(())
+}
+
+#[test]
+fn test_pr_title_multiline_commit_uses_first_line() -> Result<()> {
+    let dir = tempdir()?;
+    let _repo = init_test_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
+
+    let gateway = crate::git_gateway::GitGateway::new()?;
+    gateway.create_branch("feature")?;
+    gateway.checkout_branch("feature")?;
+
+    std::fs::write(dir.path().join("file.txt"), "content")?;
+    gateway.stage_all()?;
+    gateway.commit("Feature title\n\nDetailed description")?;
+
+    let title = submission::get_pr_title_for_branch(&gateway, "feature")?;
+    assert_eq!(title, "Feature title");
+
+    Ok(())
+}
+
+#[test]
+fn test_pr_title_fallback_to_branch_name_if_get_commit_fails() -> Result<()> {
+    let dir = tempdir()?;
+    let _repo = init_test_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
+
+    let gateway = crate::git_gateway::GitGateway::new()?;
+
+    // Test fallback with an invalid branch reference
+    // (In practice, this is rare - branches always point to commits)
+    let title = submission::get_pr_title_for_branch(&gateway, "nonexistent-branch-123")?;
+
+    // Should fall back to formatted branch name when commit lookup fails
+    assert_eq!(title, "nonexistent branch 123");
+
+    Ok(())
+}

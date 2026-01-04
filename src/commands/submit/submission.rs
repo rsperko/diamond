@@ -11,6 +11,18 @@ use crate::ref_store::RefStore;
 
 use super::PrCache;
 
+/// Get PR title for a branch - uses tip commit message or falls back to branch name
+pub(super) fn get_pr_title_for_branch(gateway: &GitGateway, branch: &str) -> Result<String> {
+    // Try to get commit subject (first line of commit message)
+    match gateway.get_commit_subject(branch) {
+        Ok(subject) => Ok(subject),
+        Err(_) => {
+            // No commits or error - fall back to formatted branch name
+            Ok(branch.replace(['-', '_'], " "))
+        }
+    }
+}
+
 /// Push diverged ancestor branches that have existing PRs.
 ///
 /// When a stack is rebased locally (e.g., via `dm sync` or `dm restack`),
@@ -255,8 +267,8 @@ pub(super) fn submit_branch(
     let draft_str = if options.draft { " (draft)" } else { "" };
     println!("Creating PR{}: {} → {}...", draft_str, branch.green(), base.blue());
 
-    // Use branch name as default title, body will be populated by stack visualization
-    let title = branch.replace(['-', '_'], " ");
+    // Use tip commit message as title, fall back to branch name if no commits
+    let title = get_pr_title_for_branch(gateway, branch)?;
     let body = String::new();
 
     let url = forge.create_pr(branch, base, &title, &body, options)?;

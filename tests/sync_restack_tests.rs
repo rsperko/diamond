@@ -1030,13 +1030,14 @@ fn test_abort_after_partial_sync_restores_all() -> Result<()> {
         original_hashes.push(hash);
     }
 
-    // Go to main, create conflicting change for b3's file
+    // Go to b3, create conflicting change for b3's file on main
     run_dm(temp_dir.path(), &["checkout", "main"])?;
     fs::write(temp_dir.path().join("f3.txt"), "conflict on main")?;
     run_git(temp_dir.path(), &["add", "."])?;
     run_git(temp_dir.path(), &["commit", "-m", "Conflict on main"])?;
 
-    // Sync - should fail at b3 due to conflict
+    // Go to b5 (top of stack) and sync - should fail at b3 (it's in our stack)
+    run_dm(temp_dir.path(), &["checkout", "b5"])?;
     let _output = run_dm(temp_dir.path(), &["sync"])?;
 
     // Check if rebase is in progress (conflict happened)
@@ -1819,6 +1820,829 @@ fn test_sync_repairs_orphaned_chain() -> Result<()> {
     // Doctor should show no issues
     let output = run_dm(temp_dir.path(), &["doctor"])?;
     assert!(output.status.success(), "Doctor should pass after sync auto-repair");
+
+    Ok(())
+}
+
+// ============================================================================
+// Stack-Aware Conflict Handling Tests (Sync)
+// ============================================================================
+
+/// Test 1: Sync from trunk skips all branch conflicts
+/// When on trunk (main), there is no "stack concept" - all branches are "other"
+/// Expected: Skip all conflicted branches, return to main cleanly
+#[test]
+fn test_sync_from_trunk_skips_all_branch_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> stack1-a -> stack1-b
+    // Create stack1-a and add a.txt ON THE BRANCH
+    run_dm(temp_dir.path(), &["create", "stack1-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "stack1-a content", "Add a on stack1-a")?;
+
+    // Create stack1-b and add b.txt
+    run_dm(temp_dir.path(), &["create", "stack1-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b")?;
+
+    // Get original hashes before conflict
+    let original_a = get_commit_hash(temp_dir.path(), "stack1-a")?;
+    let original_b = get_commit_hash(temp_dir.path(), "stack1-b")?;
+
+    // Go to main and create conflict with stack1-a (modify same file a.txt)
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "main conflicts", "Main modifies a.txt")?;
+
+    // Run sync from main - should skip both branches (a has conflict, b is child of a)
+    let output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Debug output
+    eprintln!("\n=== SYNC OUTPUT ===");
+    eprintln!("Exit code: {:?}", output.status.code());
+    eprintln!("STDOUT:\n{}", stdout);
+    eprintln!("STDERR:\n{}", stderr);
+
+    let current = get_current_branch(temp_dir.path())?;
+    eprintln!("Current branch: '{}'", current);
+    eprintln!("Rebase in progress: {}", git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: should be on main, no rebase in progress
+    assert_eq!(current, "main", "Should return to main branch");
+    assert!(
+        !git_rebase_in_progress(temp_dir.path())?,
+        "Should not be in rebase state"
+    );
+
+    // Verify: branches unchanged (not rebased)
+    assert_eq!(
+        get_commit_hash(temp_dir.path(), "stack1-a")?,
+        original_a,
+        "stack1-a should not be rebased (has conflicts)"
+    );
+    assert_eq!(
+        get_commit_hash(temp_dir.path(), "stack1-b")?,
+        original_b,
+        "stack1-b should not be rebased (parent was skipped)"
+    );
+
+    // Verify: operation state cleared
+    assert!(
+        get_operation_state(temp_dir.path())?.is_none(),
+        "Operation state should be cleared"
+    );
+
+    // Verify: output mentions skipped branches
+    assert!(
+        stdout.contains("skipped") || stdout.contains("Skipped"),
+        "Output should mention skipped branches: stderr={}, stdout={}",
+        stderr,
+        stdout
+    );
+
+    Ok(())
+}
+
+/// Test 2: Sync stops when ancestor in current stack has conflicts
+/// When on feature-c, feature-a (ancestor) is in YOUR dependency chain
+/// Expected: Stop at feature-a (leave in rebase state)
+#[test]
+fn test_sync_stops_when_ancestor_in_current_stack_has_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b -> feature-c
+    run_dm(temp_dir.path(), &["create", "feature-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on feature-a")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on feature-b")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on feature-c")?;
+
+    // Go to main and create conflict with feature-a
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "CONFLICT", "Main conflicts with a")?;
+
+    // Go back to feature-c (the top of the stack)
+    run_git(temp_dir.path(), &["checkout", "feature-c"])?;
+
+    // Run sync from feature-c - should stop at feature-a (it's in your stack)
+    let _output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+
+    // Verify: should be in rebase state
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Should be in rebase state (ancestor in current stack has conflicts)"
+    );
+
+    // Verify: operation state exists (sync paused)
+    let state = get_operation_state(temp_dir.path())?;
+    assert!(
+        state.is_some(),
+        "Operation state should exist (sync paused on conflict)"
+    );
+
+    // Verify: state indicates Sync operation
+    let state = state.unwrap();
+    assert!(
+        state
+            .get("operation_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "Sync")
+            .unwrap_or(false),
+        "Operation type should be Sync"
+    );
+
+    Ok(())
+}
+
+/// Test 3: Sync stops when current branch has conflicts
+/// When on feature-b, and feature-b conflicts, it's obviously in YOUR stack
+/// Expected: feature-a rebases, feature-b stops in conflict state
+#[test]
+fn test_sync_stops_when_current_branch_has_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b
+    run_dm(temp_dir.path(), &["create", "feature-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on feature-a")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on feature-b")?;
+
+    // Get feature-a hash
+    let original_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+
+    // Go to main and advance it (no conflict with feature-a)
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main content", "Advance main")?;
+
+    // Then create conflict with feature-b
+    create_file_and_commit(temp_dir.path(), "b.txt", "CONFLICT", "Main conflicts with b")?;
+
+    // Go back to feature-b
+    run_git(temp_dir.path(), &["checkout", "feature-b"])?;
+
+    // Run sync from feature-b - should rebase feature-a, then stop at feature-b
+    let _output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+
+    // Verify: feature-a was rebased (hash changed)
+    let new_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+    assert_ne!(new_a, original_a, "feature-a should be rebased (no conflicts)");
+
+    // Verify: should be in rebase state on feature-b
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Should be in rebase state (current branch has conflicts)"
+    );
+
+    // Verify: operation state exists
+    assert!(
+        get_operation_state(temp_dir.path())?.is_some(),
+        "Operation state should exist (sync paused)"
+    );
+
+    Ok(())
+}
+
+/// Test 4: Sync stops when child in current stack has conflicts
+/// When on feature-a, feature-c (descendant) is in YOUR stack
+/// Expected: feature-a and feature-b rebase, feature-c stops
+#[test]
+fn test_sync_stops_when_child_in_current_stack_has_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b -> feature-c
+    run_dm(temp_dir.path(), &["create", "feature-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on feature-a")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on feature-b")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on feature-c")?;
+
+    // Get original hashes
+    let original_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+    let original_b = get_commit_hash(temp_dir.path(), "feature-b")?;
+
+    // Go to main and advance it, then create conflict with feature-c
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main content", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "CONFLICT", "Main conflicts with c")?;
+
+    // Go to feature-a (the root of the stack)
+    run_git(temp_dir.path(), &["checkout", "feature-a"])?;
+
+    // Run sync from feature-a - should rebase a and b, then stop at c
+    let _output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+
+    // Verify: feature-a and feature-b were rebased
+    let new_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+    let new_b = get_commit_hash(temp_dir.path(), "feature-b")?;
+    assert_ne!(new_a, original_a, "feature-a should be rebased");
+    assert_ne!(new_b, original_b, "feature-b should be rebased");
+
+    // Verify: should be in rebase state on feature-c
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Should be in rebase state (child in current stack has conflicts)"
+    );
+
+    // Verify: operation state exists
+    assert!(
+        get_operation_state(temp_dir.path())?.is_some(),
+        "Operation state should exist (sync paused)"
+    );
+
+    Ok(())
+}
+
+/// Test 5: Sync skips unrelated stack conflicts
+/// Two stacks: stack1 (unrelated) and stack2 (you're on stack2-b)
+/// Expected: Skip stack1-a, rebase stack2-a and stack2-b, return to stack2-b cleanly
+#[test]
+fn test_sync_skips_unrelated_stack_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create first stack: main -> stack1-a
+    run_dm(temp_dir.path(), &["create", "stack1-a"])?;
+    create_file_and_commit(temp_dir.path(), "s1.txt", "stack1 content", "Add s1 on stack1-a")?;
+
+    // Go back to main and create second stack: main -> stack2-a -> stack2-b
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    run_dm(temp_dir.path(), &["create", "stack2-a"])?;
+    create_file_and_commit(temp_dir.path(), "s2a.txt", "stack2a content", "Add s2a on stack2-a")?;
+
+    run_dm(temp_dir.path(), &["create", "stack2-b"])?;
+    create_file_and_commit(temp_dir.path(), "s2b.txt", "stack2b content", "Add s2b on stack2-b")?;
+
+    // Get original hashes
+    let original_stack1_a = get_commit_hash(temp_dir.path(), "stack1-a")?;
+    let original_stack2_a = get_commit_hash(temp_dir.path(), "stack2-a")?;
+    let original_stack2_b = get_commit_hash(temp_dir.path(), "stack2-b")?;
+
+    // Go to main and create conflict with stack1-a (the unrelated stack)
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "s1.txt", "CONFLICT", "Main conflicts with stack1")?;
+
+    // Go to stack2-b (your current stack)
+    run_git(temp_dir.path(), &["checkout", "stack2-b"])?;
+
+    // Run sync - should skip stack1-a, rebase stack2-a and stack2-b
+    let output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Verify: should be on stack2-b, no rebase in progress
+    assert_eq!(
+        get_current_branch(temp_dir.path())?,
+        "stack2-b",
+        "Should return to stack2-b"
+    );
+    assert!(
+        !git_rebase_in_progress(temp_dir.path())?,
+        "Should not be in rebase state (unrelated stack conflict)"
+    );
+
+    // Verify: stack1-a unchanged (skipped)
+    assert_eq!(
+        get_commit_hash(temp_dir.path(), "stack1-a")?,
+        original_stack1_a,
+        "stack1-a should be unchanged (unrelated stack, skipped)"
+    );
+
+    // Verify: stack2-a and stack2-b rebased
+    let new_stack2_a = get_commit_hash(temp_dir.path(), "stack2-a")?;
+    let new_stack2_b = get_commit_hash(temp_dir.path(), "stack2-b")?;
+    assert_ne!(
+        new_stack2_a, original_stack2_a,
+        "stack2-a should be rebased (in your stack)"
+    );
+    assert_ne!(
+        new_stack2_b, original_stack2_b,
+        "stack2-b should be rebased (in your stack)"
+    );
+
+    // Verify: operation state cleared
+    assert!(
+        get_operation_state(temp_dir.path())?.is_none(),
+        "Operation state should be cleared"
+    );
+
+    // Verify: output mentions skipped branch
+    assert!(
+        stdout.contains("skipped") || stdout.contains("Skipped"),
+        "Output should mention skipped branches: {}",
+        stdout
+    );
+
+    Ok(())
+}
+
+/// Test 6: Sync from trunk skips multiple unrelated stacks with conflicts
+/// From trunk, both stack1 and stack2 have conflicts
+/// Expected: Skip all conflicted stacks, return to main cleanly
+#[test]
+fn test_sync_skips_multiple_unrelated_stacks_from_trunk() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack1: main -> a1 -> a2
+    run_dm(temp_dir.path(), &["create", "a1"])?;
+    create_file_and_commit(temp_dir.path(), "a1.txt", "a1 content", "Add a1 on a1")?;
+
+    run_dm(temp_dir.path(), &["create", "a2"])?;
+    create_file_and_commit(temp_dir.path(), "a2.txt", "a2 content", "Add a2 on a2")?;
+
+    // Go back to main and create stack2: main -> b1 -> b2
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    run_dm(temp_dir.path(), &["create", "b1"])?;
+    create_file_and_commit(temp_dir.path(), "b1.txt", "b1 content", "Add b1 on b1")?;
+
+    run_dm(temp_dir.path(), &["create", "b2"])?;
+    create_file_and_commit(temp_dir.path(), "b2.txt", "b2 content", "Add b2 on b2")?;
+
+    // Get original hashes
+    let original_a1 = get_commit_hash(temp_dir.path(), "a1")?;
+    let original_a2 = get_commit_hash(temp_dir.path(), "a2")?;
+    let original_b1 = get_commit_hash(temp_dir.path(), "b1")?;
+    let original_b2 = get_commit_hash(temp_dir.path(), "b2")?;
+
+    // Go to main and create conflicts with both a1 and b1
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a1.txt", "CONFLICT_A", "Main conflicts with a1")?;
+    create_file_and_commit(temp_dir.path(), "b1.txt", "CONFLICT_B", "Main conflicts with b1")?;
+
+    // Run sync from trunk - should skip all branches
+    let output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Verify: should be on main, no rebase in progress
+    assert_eq!(get_current_branch(temp_dir.path())?, "main");
+    assert!(!git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: all branches unchanged (skipped)
+    assert_eq!(get_commit_hash(temp_dir.path(), "a1")?, original_a1);
+    assert_eq!(get_commit_hash(temp_dir.path(), "a2")?, original_a2);
+    assert_eq!(get_commit_hash(temp_dir.path(), "b1")?, original_b1);
+    assert_eq!(get_commit_hash(temp_dir.path(), "b2")?, original_b2);
+
+    // Verify: operation state cleared
+    assert!(get_operation_state(temp_dir.path())?.is_none());
+
+    // Verify: output mentions skipped branches
+    assert!(
+        stdout.contains("skipped") || stdout.contains("Skipped"),
+        "Output should mention skipped branches: {}",
+        stdout
+    );
+
+    Ok(())
+}
+
+/// Test 7: Sync from trunk with parent and child conflicts in different stacks
+/// Stack1: a1 has conflict (so a2 also skipped). Stack2: b2 has conflict (so b3 also skipped)
+/// Expected: Skip all branches with dependency chain logic
+#[test]
+fn test_sync_from_trunk_with_multiple_stacks_skips_all_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack1: main -> a1 -> a2
+    run_dm(temp_dir.path(), &["create", "a1"])?;
+    create_file_and_commit(temp_dir.path(), "a1.txt", "a1 content", "Add a1 on a1")?;
+
+    run_dm(temp_dir.path(), &["create", "a2"])?;
+    create_file_and_commit(temp_dir.path(), "a2.txt", "a2 content", "Add a2 on a2")?;
+
+    // Go back to main and create stack2: main -> b1 -> b2 -> b3
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    run_dm(temp_dir.path(), &["create", "b1"])?;
+    create_file_and_commit(temp_dir.path(), "b1.txt", "b1 content", "Add b1 on b1")?;
+
+    run_dm(temp_dir.path(), &["create", "b2"])?;
+    create_file_and_commit(temp_dir.path(), "b2.txt", "b2 content", "Add b2 on b2")?;
+
+    run_dm(temp_dir.path(), &["create", "b3"])?;
+    create_file_and_commit(temp_dir.path(), "b3.txt", "b3 content", "Add b3 on b3")?;
+
+    // Get original hashes
+    let original_a1 = get_commit_hash(temp_dir.path(), "a1")?;
+    let original_a2 = get_commit_hash(temp_dir.path(), "a2")?;
+    let _original_b1 = get_commit_hash(temp_dir.path(), "b1")?;
+    let original_b2 = get_commit_hash(temp_dir.path(), "b2")?;
+    let original_b3 = get_commit_hash(temp_dir.path(), "b3")?;
+
+    // Go to main and create conflicts: a1 and b2
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a1.txt", "CONFLICT_A", "Main conflicts with a1")?;
+    create_file_and_commit(temp_dir.path(), "b2.txt", "CONFLICT_B", "Main conflicts with b2")?;
+
+    // Run sync from trunk - should skip a1+a2 (parent failed), b1 might rebase, b2+b3 skipped
+    let output = run_dm(temp_dir.path(), &["sync", "--no-cleanup"])?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Verify: should be on main, no rebase in progress
+    assert_eq!(get_current_branch(temp_dir.path())?, "main");
+    assert!(!git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: a1 and a2 unchanged (a1 conflict, a2 is child)
+    assert_eq!(get_commit_hash(temp_dir.path(), "a1")?, original_a1);
+    assert_eq!(get_commit_hash(temp_dir.path(), "a2")?, original_a2);
+
+    // Verify: b1 might be rebased (no conflict), but b2 and b3 unchanged
+    let _new_b1 = get_commit_hash(temp_dir.path(), "b1")?;
+    // b1 could be rebased or skipped depending on conflict in b2
+    // For now, just check b2 and b3 are unchanged
+    assert_eq!(get_commit_hash(temp_dir.path(), "b2")?, original_b2);
+    assert_eq!(get_commit_hash(temp_dir.path(), "b3")?, original_b3);
+
+    // Verify: operation state cleared
+    assert!(get_operation_state(temp_dir.path())?.is_none());
+
+    // Verify: output mentions skipped branches
+    assert!(
+        stdout.contains("skipped") || stdout.contains("Skipped"),
+        "Output should mention skipped branches: {}",
+        stdout
+    );
+
+    Ok(())
+}
+
+// ============================================================================
+// Restack Regression Tests (Always Stop on Conflicts)
+// ============================================================================
+
+/// Restack Test R1: Restack stops on current branch conflict
+/// Setup: Stack main -> feature-a -> feature-b, run restack from feature-b, make feature-b conflict
+/// Expected: STOP at feature-b
+#[test]
+fn test_restack_stops_on_current_branch_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a")?;
+    run_dm(temp_dir.path(), &["create", "feature-a", "-a", "-m", "Feature A"])?;
+
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b")?;
+    run_dm(temp_dir.path(), &["create", "feature-b", "-a", "-m", "Feature B"])?;
+
+    // Go to main and create conflict with feature-b
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "CONFLICT", "Main conflicts with b")?;
+
+    // Go back to feature-b
+    run_git(temp_dir.path(), &["checkout", "feature-b"])?;
+
+    // Run restack - should STOP at feature-b
+    let _output = run_dm(temp_dir.path(), &["restack"])?;
+
+    // Verify: should be in rebase state
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Restack should stop in rebase state (current branch conflict)"
+    );
+
+    // Verify: operation state exists
+    let state = get_operation_state(temp_dir.path())?;
+    assert!(state.is_some(), "Operation state should exist");
+
+    // Verify: state indicates Restack operation
+    let state = state.unwrap();
+    assert!(
+        state
+            .get("operation_type")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "Restack")
+            .unwrap_or(false),
+        "Operation type should be Restack"
+    );
+
+    Ok(())
+}
+
+/// Restack Test R2: Restack stops on ancestor conflict
+/// Setup: Stack main -> feature-a -> feature-b -> feature-c, run restack from feature-c, make feature-a conflict
+/// Expected: STOP at feature-a (not skip like sync does)
+#[test]
+fn test_restack_stops_on_ancestor_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b -> feature-c
+    run_dm(temp_dir.path(), &["create", "feature-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on feature-a")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on feature-b")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on feature-c")?;
+
+    // Go to main and create conflict with feature-a
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "CONFLICT", "Main conflicts with a")?;
+
+    // Go to feature-c
+    run_git(temp_dir.path(), &["checkout", "feature-c"])?;
+
+    // Get hashes to verify feature-b and feature-c were NOT rebased
+    let original_b = get_commit_hash(temp_dir.path(), "feature-b")?;
+    let original_c = get_commit_hash(temp_dir.path(), "feature-c")?;
+
+    // Run restack - should STOP at feature-a
+    let _output = run_dm(temp_dir.path(), &["restack"])?;
+
+    // Verify: should be in rebase state
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Restack should stop in rebase state (ancestor conflict)"
+    );
+
+    // Verify: feature-b and feature-c were not yet rebased
+    assert_eq!(
+        get_commit_hash(temp_dir.path(), "feature-b")?,
+        original_b,
+        "feature-b should not be rebased yet (stopped at ancestor)"
+    );
+    assert_eq!(
+        get_commit_hash(temp_dir.path(), "feature-c")?,
+        original_c,
+        "feature-c should not be rebased yet (stopped at ancestor)"
+    );
+
+    Ok(())
+}
+
+/// Restack Test R3: Restack stops on child conflict
+/// Setup: Stack main -> feature-a -> feature-b -> feature-c, run restack from feature-a, make feature-c conflict
+/// Expected: STOP at feature-c (not skip)
+#[test]
+fn test_restack_stops_on_child_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> feature-a -> feature-b -> feature-c
+    run_dm(temp_dir.path(), &["create", "feature-a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on feature-a")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on feature-b")?;
+
+    run_dm(temp_dir.path(), &["create", "feature-c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on feature-c")?;
+
+    // Get original hashes
+    let original_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+    let original_b = get_commit_hash(temp_dir.path(), "feature-b")?;
+
+    // Go to main and create conflict with feature-c
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "CONFLICT", "Main conflicts with c")?;
+
+    // Go to feature-a
+    run_git(temp_dir.path(), &["checkout", "feature-a"])?;
+
+    // Run restack - should rebase a and b, then STOP at c
+    let _output = run_dm(temp_dir.path(), &["restack"])?;
+
+    // Verify: feature-a and feature-b were rebased
+    let new_a = get_commit_hash(temp_dir.path(), "feature-a")?;
+    let new_b = get_commit_hash(temp_dir.path(), "feature-b")?;
+    assert_ne!(new_a, original_a, "feature-a should be rebased");
+    assert_ne!(new_b, original_b, "feature-b should be rebased");
+
+    // Verify: should be in rebase state on feature-c
+    assert!(
+        git_rebase_in_progress(temp_dir.path())?,
+        "Restack should stop in rebase state (child conflict)"
+    );
+
+    Ok(())
+}
+
+/// Restack Test R4: Restack stops on first of multiple conflicts
+/// Setup: Stack main -> a -> b -> c, make both a and c conflict
+/// Expected: STOP at a (first conflict)
+#[test]
+fn test_restack_stops_on_first_of_multiple_conflicts() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> a -> b -> c
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a")?;
+    run_dm(temp_dir.path(), &["create", "a", "-a", "-m", "A"])?;
+
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b")?;
+    run_dm(temp_dir.path(), &["create", "b", "-a", "-m", "B"])?;
+
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c")?;
+    run_dm(temp_dir.path(), &["create", "c", "-a", "-m", "C"])?;
+
+    // Get original hashes
+    let original_b = get_commit_hash(temp_dir.path(), "b")?;
+    let original_c = get_commit_hash(temp_dir.path(), "c")?;
+
+    // Go to main and create conflicts with both a and c
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "CONFLICT_A", "Main conflicts with a")?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "CONFLICT_C", "Main conflicts with c")?;
+
+    // Go to c and run restack - should STOP at a (first conflict)
+    run_git(temp_dir.path(), &["checkout", "c"])?;
+    let _output = run_dm(temp_dir.path(), &["restack"])?;
+
+    // Verify: should be in rebase state
+    assert!(git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: b and c not processed yet
+    assert_eq!(get_commit_hash(temp_dir.path(), "b")?, original_b);
+    assert_eq!(get_commit_hash(temp_dir.path(), "c")?, original_c);
+
+    Ok(())
+}
+
+/// Restack Test R5: Restack with --only flag still stops on conflict
+/// Setup: Stack main -> a -> b -> c, run restack --only from b, make b conflict
+/// Expected: STOP at b (--only doesn't skip conflicts)
+#[test]
+fn test_restack_only_stops_on_current_branch_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> a -> b -> c
+    run_dm(temp_dir.path(), &["create", "a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on a")?;
+
+    run_dm(temp_dir.path(), &["create", "b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on b")?;
+
+    run_dm(temp_dir.path(), &["create", "c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on c")?;
+
+    // Go to main and create conflict with b
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "CONFLICT", "Main conflicts with b")?;
+
+    // First, rebase a onto new main (so a picks up the conflicting b.txt from main)
+    run_git(temp_dir.path(), &["checkout", "a"])?;
+    run_git(temp_dir.path(), &["rebase", "main"])?;
+
+    // Get hashes AFTER manual rebase (these are the "original" hashes before dm restack)
+    let original_a = get_commit_hash(temp_dir.path(), "a")?;
+    let original_c = get_commit_hash(temp_dir.path(), "c")?;
+
+    // Now go to b and run restack --only - should STOP at b (conflict when rebasing onto updated a)
+    run_git(temp_dir.path(), &["checkout", "b"])?;
+    let _output = run_dm(temp_dir.path(), &["restack", "--only"])?;
+
+    // Verify: should be in rebase state
+    assert!(git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: a and c not touched (--only only restacks b)
+    assert_eq!(get_commit_hash(temp_dir.path(), "a")?, original_a);
+    assert_eq!(get_commit_hash(temp_dir.path(), "c")?, original_c);
+
+    Ok(())
+}
+
+/// Restack Test R6: Restack with --upstack flag still stops on child conflict
+/// Setup: Stack main -> a -> b -> c, run restack --upstack from b, make c conflict
+/// Expected: STOP at c (--upstack includes descendants)
+#[test]
+fn test_restack_upstack_stops_on_child_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> a -> b -> c
+    run_dm(temp_dir.path(), &["create", "a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on a")?;
+
+    run_dm(temp_dir.path(), &["create", "b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on b")?;
+
+    run_dm(temp_dir.path(), &["create", "c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on c")?;
+
+    // Go to main and create conflict with c
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "CONFLICT", "Main conflicts with c")?;
+
+    // First, rebase a and b onto new main (so they pick up the conflicting c.txt)
+    run_git(temp_dir.path(), &["checkout", "a"])?;
+    run_git(temp_dir.path(), &["rebase", "main"])?;
+    run_git(temp_dir.path(), &["checkout", "b"])?;
+    run_git(temp_dir.path(), &["rebase", "a"])?; // Rebase b onto updated a
+
+    // Get hash after manual rebase
+    let original_a = get_commit_hash(temp_dir.path(), "a")?;
+    let original_b = get_commit_hash(temp_dir.path(), "b")?;
+
+    // Now run restack --upstack from b - should skip b (already based on a), then STOP at c
+    let _output = run_dm(temp_dir.path(), &["restack", "--upstack"])?;
+
+    // Verify: b was NOT rebased again (already based on a)
+    let new_b = get_commit_hash(temp_dir.path(), "b")?;
+    assert_eq!(new_b, original_b, "b should not be rebased again (already up to date)");
+
+    // Verify: should be in rebase state on c
+    assert!(git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: a not touched (--upstack doesn't include ancestors)
+    assert_eq!(get_commit_hash(temp_dir.path(), "a")?, original_a);
+
+    Ok(())
+}
+
+/// Restack Test R7: Restack with --downstack flag still stops on ancestor conflict
+/// Setup: Stack main -> a -> b -> c, run restack --downstack from c, make a conflict
+/// Expected: STOP at a (--downstack includes ancestors)
+#[test]
+fn test_restack_downstack_stops_on_ancestor_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> a -> b -> c
+    run_dm(temp_dir.path(), &["create", "a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on a")?;
+
+    run_dm(temp_dir.path(), &["create", "b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on b")?;
+
+    run_dm(temp_dir.path(), &["create", "c"])?;
+    create_file_and_commit(temp_dir.path(), "c.txt", "c content", "Add c on c")?;
+
+    // Get original hashes
+    let original_b = get_commit_hash(temp_dir.path(), "b")?;
+    let original_c = get_commit_hash(temp_dir.path(), "c")?;
+
+    // Go to main and create conflict with a
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "CONFLICT", "Main conflicts with a")?;
+
+    // Go to c and run restack --downstack - should STOP at a
+    run_git(temp_dir.path(), &["checkout", "c"])?;
+    let _output = run_dm(temp_dir.path(), &["restack", "--downstack"])?;
+
+    // Verify: should be in rebase state on a
+    assert!(git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: b and c not processed yet
+    assert_eq!(get_commit_hash(temp_dir.path(), "b")?, original_b);
+    assert_eq!(get_commit_hash(temp_dir.path(), "c")?, original_c);
+
+    Ok(())
+}
+
+/// Restack Test R8: Restack from trunk still stops on branch conflict
+/// Setup: Stack main -> a -> b, run restack from main, make a conflict
+/// Expected: STOP at a (even from trunk, restack should stop)
+#[test]
+fn test_restack_from_trunk_stops_on_branch_conflict() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    init_test_repo(temp_dir.path())?;
+
+    // Create stack: main -> a -> b
+    run_dm(temp_dir.path(), &["create", "a"])?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "a content", "Add a on a")?;
+
+    run_dm(temp_dir.path(), &["create", "b"])?;
+    create_file_and_commit(temp_dir.path(), "b.txt", "b content", "Add b on b")?;
+
+    // Get original hashes
+    let original_b = get_commit_hash(temp_dir.path(), "b")?;
+
+    // Go to main and create conflict with a
+    run_git(temp_dir.path(), &["checkout", "main"])?;
+    create_file_and_commit(temp_dir.path(), "main.txt", "main advance", "Advance main")?;
+    create_file_and_commit(temp_dir.path(), "a.txt", "CONFLICT", "Main conflicts with a")?;
+
+    // Run restack from main - should STOP at a
+    let _output = run_dm(temp_dir.path(), &["restack"])?;
+
+    // Verify: should be in rebase state
+    assert!(git_rebase_in_progress(temp_dir.path())?);
+
+    // Verify: b not processed yet
+    assert_eq!(get_commit_hash(temp_dir.path(), "b")?, original_b);
 
     Ok(())
 }

@@ -75,6 +75,20 @@ Diamond auto-detects your forge from the git remote URL. Self-hosted GitLab inst
 
 ---
 
+## Repository Setup (Important!)
+
+**⚠️ For the best experience, configure your repository to use squash merging:**
+
+Stacked PRs work best with a clean, linear git history. Configure your GitHub/GitLab repository to squash merge by default:
+
+**GitHub:** Settings → Pull Requests → **Uncheck** "Allow merge commits", **Check** "Allow squash merging"
+
+**GitLab:** Settings → General → Merge requests → Set merge method to "Squash commits"
+
+Without this, your git history will be cluttered with merge commits instead of clean, revertable changes. See [Configuration Guide](docs/CONFIGURATION.md#repository-setup-githubgitlab) for details.
+
+---
+
 ## Shell Completion
 
 Diamond supports tab completion for bash, zsh, fish, and more. Completions include all subcommands, options, and even **dynamic branch name suggestions** for commands like `checkout` and `delete`.

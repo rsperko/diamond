@@ -15,7 +15,84 @@ dm config set repo.remote upstream
 dm config show
 ```
 
-## Configuration Layers
+---
+
+## Repository Setup (GitHub/GitLab)
+
+**⚠️ IMPORTANT:** For the best stacked PR experience, configure your GitHub/GitLab repository to use **squash merging** by default.
+
+### Why Squash Merging Matters
+
+Stacked PRs work best with a **clean, linear history**. Without squash merging, you'll get messy merge commits:
+
+**❌ Without squash (merge commits):**
+```
+*   a1b2c3d Merge pull request #3 from user/feature-c
+|\
+| * e4f5g6h Third commit
+| * h7i8j9k Second commit
+| * k1l2m3n First commit
+|/
+*   n4o5p6q Merge pull request #2 from user/feature-b
+```
+
+**✅ With squash merging:**
+```
+* a1b2c3d feature-c: Add authentication
+* e4f5g6h feature-b: Update database schema
+* h7i8j9k feature-a: Fix bug in parser
+```
+
+### GitHub Configuration
+
+1. Go to your repository settings: `https://github.com/YOUR_USERNAME/YOUR_REPO/settings`
+2. Scroll to **"Pull Requests"** section
+3. Configure merge options:
+   - ✅ **Check** "Allow squash merging"
+   - ❌ **Uncheck** "Allow merge commits"
+   - ❌ **Uncheck** "Allow rebase merging" (optional, but recommended for consistency)
+4. Set **default merge method** to "Squash and merge"
+
+### GitLab Configuration
+
+1. Go to Settings → General → Merge requests
+2. Set **Merge method** to "Fast-forward merge" or "Squash commits"
+3. Enable "Delete source branch" option (recommended)
+
+### What Happens When You Squash
+
+When you merge a PR with squash:
+- All commits on the branch are combined into a single commit
+- The commit message becomes the PR title/description
+- Branch history is simplified
+- Easy to revert entire features with one `git revert`
+
+**Example:**
+
+```bash
+# Your branch has 3 commits:
+* fix typo
+* address review feedback
+* Add authentication feature
+
+# After squash merge to main:
+* Add authentication feature  ← Single clean commit
+```
+
+### Manual Squash Per PR
+
+If you don't want to change repo settings, you can squash manually:
+
+1. When merging on GitHub, click the dropdown next to **"Merge pull request"**
+2. Select **"Squash and merge"**
+3. Edit the commit message if needed
+4. Confirm
+
+**Note:** This requires remembering to squash every time. Changing the default is more reliable.
+
+---
+
+## Diamond Configuration Layers
 
 Configuration is loaded from multiple sources, with later sources overriding earlier ones:
 
