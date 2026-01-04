@@ -1,5 +1,6 @@
 use anyhow::Result;
 use colored::Colorize;
+use std::collections::HashSet;
 
 use crate::cache::Cache;
 use crate::ui;
@@ -24,6 +25,8 @@ pub(crate) struct SyncOutcome {
     already_in_sync: Vec<String>,
     /// Branch that had conflicts (if any) - stops processing
     conflict_branch: Option<String>,
+    /// Branches that were skipped due to conflicts (branch_name, reason)
+    skipped_branches: Vec<(String, String)>,
 }
 
 impl SyncOutcome {
@@ -200,7 +203,7 @@ fn run_sync_dry_run(ref_store: &RefStore) -> Result<()> {
 }
 
 /// Start a fresh sync operation
-async fn run_sync(force: bool, no_cleanup: bool, _restack: bool) -> Result<()> {
+async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
     let gateway = GitGateway::new()?;
 
     // Check for staged or modified changes (allow untracked files)
@@ -349,6 +352,22 @@ async fn run_sync(force: bool, no_cleanup: bool, _restack: bool) -> Result<()> {
         return Ok(());
     }
 
+    // If --no-restack was specified, stop here (cleanup only, no rebasing)
+    if !restack {
+        ui::success_bold("Sync complete (cleanup only)");
+        // Return to original branch if it still exists, otherwise stay on trunk
+        if gateway.branch_exists(&original_branch)? {
+            gateway.checkout_branch(&original_branch)?;
+        } else {
+            ui::step(&format!(
+                "Original branch '{}' was deleted, staying on {}",
+                original_branch, trunk
+            ));
+            gateway.checkout_branch(&trunk)?;
+        }
+        return Ok(());
+    }
+
     // Check for worktree conflicts before starting any rebase operations
     worktree::check_branches_for_worktree_conflicts(&branches_to_rebase)?;
 
@@ -427,6 +446,21 @@ pub fn continue_sync_from_state(
     let total = state.all_branches.len();
     let mut processed = total - state.remaining_branches.len();
 
+    // Determine "current stack" for stack-aware conflict handling
+    // If on trunk: no stack concept (empty set) - all branches are "other"
+    // If on feature branch: collect full dependency tree (ancestors + current + descendants)
+    let current_stack_branches: HashSet<String> = if state.original_branch == trunk {
+        HashSet::new() // On trunk: no stack, all branches are unrelated
+    } else {
+        // On feature branch: find stack root and collect all branches in the tree
+        let stack_root = find_stack_root(&state.original_branch, ref_store);
+        ref_store
+            .collect_branches_dfs(&[stack_root])
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
+    };
+
     while !state.remaining_branches.is_empty() {
         let branch = state.remaining_branches.remove(0);
         state.current_branch = Some(branch.clone());
@@ -460,22 +494,52 @@ pub fn continue_sync_from_state(
         let rebase_result = gateway.rebase_fork_point(&branch, &onto)?;
 
         if rebase_result.has_conflicts() {
-            // State already saved above, just inform user
-            ui::spinner_error(spin, &format!("Conflicts in {}", branch));
-            ui::blank();
-            ui::warning(&format!("Conflicts detected while rebasing '{}'", branch));
-            println!();
-            println!("Resolve the conflicts, then run:");
-            println!(
-                "  {} to continue syncing",
-                ui::print_cmd(&format!("{} continue", program_name()))
-            );
-            println!(
-                "  {} to abort the sync",
-                ui::print_cmd(&format!("{} abort", program_name()))
-            );
-            outcome.conflict_branch = Some(branch);
-            return Ok(outcome);
+            // Stack-aware conflict handling: only stop if conflict is in YOUR stack
+            let is_in_current_stack = current_stack_branches.contains(&branch);
+
+            if is_in_current_stack {
+                // STOP: Branch is in your dependency chain (ancestor, current, or descendant)
+                // User needs to resolve this to continue working on their stack
+                ui::spinner_error(spin, &format!("Conflicts in {}", branch));
+                ui::blank();
+                ui::warning(&format!("Conflicts detected while rebasing '{}'", branch));
+                println!();
+                println!("Resolve the conflicts, then run:");
+                println!(
+                    "  {} to continue syncing",
+                    ui::print_cmd(&format!("{} continue", program_name()))
+                );
+                println!(
+                    "  {} to abort the sync",
+                    ui::print_cmd(&format!("{} abort", program_name()))
+                );
+                outcome.conflict_branch = Some(branch);
+                return Ok(outcome);
+            } else {
+                // SKIP: Branch is in a different stack, doesn't block your work
+                // Abort the rebase and continue with other branches
+                gateway.rebase_abort()?;
+                ui::spinner_warning(spin, &format!("Skipped {} (conflicts)", branch));
+
+                let reason = format!("conflicts with {}", onto);
+                outcome.skipped_branches.push((branch.clone(), reason));
+
+                // Skip all children too (dependency chain: can't rebase children if parent failed)
+                let children = ref_store
+                    .collect_branches_dfs(std::slice::from_ref(&branch))
+                    .unwrap_or_default();
+                for child in children {
+                    if child != branch {
+                        outcome
+                            .skipped_branches
+                            .push((child.clone(), "parent was skipped".to_string()));
+                        state.remaining_branches.retain(|b| b != &child);
+                    }
+                }
+
+                // Continue to next branch
+                continue;
+            }
         }
 
         ui::spinner_success(spin, &format!("Rebased {}", branch));
@@ -525,6 +589,25 @@ pub fn continue_sync_from_state(
             outcome.total_branches(),
             if outcome.total_branches() == 1 { "" } else { "es" }
         ));
+    }
+
+    // Show skipped branches if any
+    if !outcome.skipped_branches.is_empty() {
+        ui::blank();
+        ui::warning(&format!(
+            "{} branch{} could not be rebased:",
+            outcome.skipped_branches.len(),
+            if outcome.skipped_branches.len() == 1 { "" } else { "es" }
+        ));
+        for (branch, reason) in &outcome.skipped_branches {
+            println!("  • {} ({})", branch.yellow(), reason);
+        }
+        ui::blank();
+        println!(
+            "Run '{} checkout <branch> && {} restack' when ready to resolve conflicts.",
+            program_name(),
+            program_name()
+        );
     }
 
     // Note: Stack visualization update moved to run_sync() to happen AFTER restack
@@ -614,6 +697,7 @@ mod tests {
             rebased: vec!["feature-1".to_string(), "feature-2".to_string()],
             already_in_sync: vec![],
             conflict_branch: None,
+            skipped_branches: vec![],
         };
         assert!(outcome.any_work_done());
         assert_eq!(outcome.total_branches(), 2);
@@ -625,6 +709,7 @@ mod tests {
             rebased: vec![],
             already_in_sync: vec!["feature-1".to_string(), "feature-2".to_string()],
             conflict_branch: None,
+            skipped_branches: vec![],
         };
         assert!(!outcome.any_work_done());
         assert_eq!(outcome.total_branches(), 2);
@@ -636,6 +721,7 @@ mod tests {
             rebased: vec!["feature-1".to_string()],
             already_in_sync: vec!["feature-2".to_string(), "feature-3".to_string()],
             conflict_branch: None,
+            skipped_branches: vec![],
         };
         assert!(outcome.any_work_done());
         assert_eq!(outcome.total_branches(), 3);
@@ -647,6 +733,7 @@ mod tests {
             rebased: vec!["feature-1".to_string()],
             already_in_sync: vec![],
             conflict_branch: Some("feature-2".to_string()),
+            skipped_branches: vec![],
         };
         assert!(outcome.any_work_done());
         assert_eq!(outcome.conflict_branch, Some("feature-2".to_string()));
