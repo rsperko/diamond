@@ -2518,9 +2518,8 @@ fn test_checkout_preserves_gitignored_files() -> Result<()> {
 
 #[test]
 fn test_checkout_preserves_untracked_files_not_in_target() -> Result<()> {
-    // Untracked files that don't conflict should be preserved
-    // Note: Our implementation uses remove_untracked(true) which removes untracked
-    // files. This test documents the current behavior.
+    // Untracked files should be preserved during checkout (matches git behavior)
+    // We explicitly DO NOT use remove_untracked(true) to match git semantics
     let dir = tempdir()?;
     let _repo = init_repo(dir.path())?;
     let _ctx = TestRepoContext::new(dir.path());

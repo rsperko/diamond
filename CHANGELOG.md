@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Homebrew tap for macOS installation**: Diamond can now be installed via `brew install rsperko/tap/diamond` on macOS, removing the need for a Rust toolchain.
 
+### Fixed
+- **Critical: Branch checkout no longer deletes untracked files**: Fixed checkout operations silently deleting untracked files. Checkout now preserves untracked files like git does.
+- **Critical: Navigation commands now check for uncommitted changes**: Commands like `dm up`, `dm down`, `dm top`, `dm bottom` now fail safely when you have uncommitted changes instead of silently overwriting them. This matches git's checkout behavior.
+
 ## [0.1.1] - 2026-01-04
 
 ### Changed

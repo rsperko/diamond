@@ -55,8 +55,8 @@ pub fn run(steps: usize, to: Option<String>) -> Result<()> {
         children.sort();
         let child = children[0];
 
-        // Checkout child
-        gateway.checkout_branch(child)?;
+        // Checkout child safely (fail if uncommitted changes)
+        gateway.checkout_branch_safe(child)?;
 
         if steps == 1 {
             if children.len() > 1 {
@@ -87,8 +87,8 @@ fn navigate_to_branch(gateway: &GitGateway, ref_store: &RefStore, from: &str, ta
         );
     }
 
-    // Checkout the target branch
-    gateway.checkout_branch(target)?;
+    // Checkout the target branch safely (fail if uncommitted changes)
+    gateway.checkout_branch_safe(target)?;
     println!("Switched to descendant branch: {}", target);
 
     Ok(())
@@ -430,6 +430,66 @@ mod tests {
         let result = run(1, Some("stack2".to_string()));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not a descendant"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_up_with_uncommitted_changes_fails() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo_with_branch(dir.path(), "main")?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+        let ref_store = RefStore::new()?;
+
+        // Create and commit a tracked file on main
+        let file_path = dir.path().join("tracked.txt");
+        std::fs::write(&file_path, "original content")?;
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("tracked.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent = repo.head()?.peel_to_commit()?;
+        let sig = git2::Signature::now("Test", "test@test.com")?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Add tracked file", &tree, &[&parent])?;
+
+        // Set up stack: main -> child
+        ref_store.set_trunk("main")?;
+        ref_store.set_parent("child", "main")?;
+
+        // Create child branch
+        gateway.create_branch("child")?;
+
+        // Go back to main
+        let obj = repo.revparse_single("main")?;
+        repo.checkout_tree(&obj, None)?;
+        repo.set_head("refs/heads/main")?;
+
+        // Modify the tracked file without committing
+        std::fs::write(&file_path, "modified uncommitted content")?;
+
+        // Try to navigate up - should fail with uncommitted changes
+        let result = run(1, None);
+        assert!(result.is_err(), "dm up should fail with uncommitted changes");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("uncommitted changes"),
+            "Error should mention uncommitted changes: {}",
+            err_msg
+        );
+
+        // Verify we're still on main (didn't switch)
+        assert_eq!(gateway.get_current_branch_name()?, "main");
+
+        // Verify uncommitted changes are preserved
+        let content = std::fs::read_to_string(&file_path)?;
+        assert_eq!(
+            content, "modified uncommitted content",
+            "Uncommitted changes should be preserved"
+        );
 
         Ok(())
     }

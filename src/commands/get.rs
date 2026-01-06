@@ -73,8 +73,9 @@ pub fn run(pr_ref: String, force: bool, unfrozen: bool) -> Result<()> {
     }
 
     // Checkout the tip (last in chain, which is the original PR)
+    // Use safe mode - fail if user has uncommitted changes
     let tip = chain.last().unwrap();
-    gateway.checkout_branch(&tip.head_ref)?;
+    gateway.checkout_branch_safe(&tip.head_ref)?;
 
     println!();
     println!(

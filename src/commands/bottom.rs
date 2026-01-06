@@ -31,7 +31,7 @@ pub fn run() -> Result<()> {
     if bottom == current {
         println!("{} Already at stack bottom", "✓".green().bold());
     } else {
-        gateway.checkout_branch(&bottom)?;
+        gateway.checkout_branch_safe(&bottom)?;
         println!("{} Jumped to bottom: {}", "✓".green().bold(), bottom.green());
     }
 
