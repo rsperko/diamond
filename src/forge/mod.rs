@@ -161,6 +161,18 @@ pub trait Forge: Send + Sync {
     fn push_branch(&self, branch: &str, force: bool) -> Result<()> {
         let gateway = GitGateway::new()?;
         let force_arg = if force { "--force" } else { "--force-with-lease" };
+
+        if crate::context::ExecutionContext::is_verbose() {
+            use colored::Colorize;
+            eprintln!(
+                "  {} git push --quiet {} {} {}",
+                "[cmd]".dimmed(),
+                gateway.remote(),
+                branch,
+                force_arg
+            );
+        }
+
         // Use --quiet to suppress remote messages, capture output to reduce noise
         let output = Command::new("git")
             .args(["push", "--quiet", gateway.remote(), branch, force_arg])

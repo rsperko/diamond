@@ -6,6 +6,7 @@
 use super::{AsyncForge, CiStatus, Forge, ForgeConfig, ForgeType, MergeMethod, PrFullInfo, PrInfo, PrState, ReviewState};
 use crate::git_gateway::GitGateway;
 use anyhow::{Context, Result};
+use colored::Colorize;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -35,6 +36,9 @@ impl GitHubForge {
     /// rate-limited requests. GitHub API rate limits return specific error
     /// messages that we detect and handle.
     fn run_gh(&self, args: &[&str]) -> Result<std::process::Output> {
+        if crate::context::ExecutionContext::is_verbose() {
+            eprintln!("  {} gh {}", "[cmd]".dimmed(), args.join(" "));
+        }
         self.run_gh_with_retry(args, MAX_RATE_LIMIT_RETRIES)
     }
 
@@ -508,6 +512,12 @@ impl Forge for GitHubForge {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
+            // Log the actual error in verbose mode for debugging
+            if crate::context::ExecutionContext::is_verbose() {
+                use colored::Colorize;
+                eprintln!("  {} {}", "[stderr]".red(), stderr.trim());
+            }
+
             // Check for common errors and provide helpful messages
             if stderr.contains("not authenticated") || stderr.contains("gh auth login") {
                 anyhow::bail!("GitHub CLI not authenticated. Run 'gh auth login' first.");
@@ -515,11 +525,30 @@ impl Forge for GitHubForge {
             if stderr.contains("merge queue") {
                 anyhow::bail!("PR {} is in a merge queue. Visit the PR page to check status.", pr_ref);
             }
-            if stderr.contains("required status") || stderr.contains("checks") {
-                anyhow::bail!("PR {} has failing checks or required status checks not met.", pr_ref);
+            // Known GitHub error patterns from gh CLI output
+            // Be specific with "checks" pattern to avoid false positives like "All checks have passed"
+            if stderr.contains("required status checks")
+                || stderr.contains("failing checks")
+                || stderr.contains("failing status")
+            {
+                anyhow::bail!("PR {} has failing or required status checks not met.", pr_ref);
             }
             if stderr.contains("review") && stderr.contains("required") {
                 anyhow::bail!("PR {} requires reviews that haven't been approved.", pr_ref);
+            }
+            // Generic branch protection error - this is what GitHub returns when ANY
+            // branch protection rule blocks the merge (CI, reviews, status checks, etc.)
+            // Known pattern: "the base branch policy prohibits the merge"
+            // See: https://github.com/cli/cli/issues/7518
+            if stderr.contains("base branch policy")
+                || stderr.contains("branch protection")
+                || stderr.contains("protected branch")
+            {
+                anyhow::bail!(
+                    "PR {} is blocked by branch protection rules. \
+                     This may be due to failing CI checks, missing reviews, or other requirements.",
+                    pr_ref
+                );
             }
 
             anyhow::bail!("gh pr merge failed: {}", stderr.trim());

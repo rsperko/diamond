@@ -264,7 +264,9 @@ pub async fn run(
             }
             Err(e) => {
                 eprintln!("  {} Failed to merge PR #{}: {}", "✗".red(), pr_number, e);
-                if i == 0 {
+
+                // Only suggest dm sync for actual conflicts, not branch protection
+                if i == 0 && is_not_mergeable_error(&e) {
                     eprintln!(
                         "\n{} This PR has conflicts with {}. Run '{} sync' to update your branch.",
                         "!".yellow(),
@@ -272,6 +274,7 @@ pub async fn run(
                         program_name()
                     );
                 }
+
                 eprintln!("\n{} Stopping downstack merge. Remaining PRs not merged.", "!".yellow());
                 return Err(e);
             }
@@ -366,6 +369,30 @@ fn proactive_rebase_for_merge(gateway: &GitGateway, forge: &dyn Forge, branch: &
 fn is_not_mergeable_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string().to_lowercase();
 
+    // Exclude branch protection/policy errors - these are NOT merge conflicts
+    // These patterns are from actual gh/glab CLI output:
+    //
+    // CONFIRMED patterns (from real errors):
+    // - "base branch policy" - GitHub's generic protection error
+    // - "branch protection" - GitHub alternative phrasing
+    // - "protected branch" - Common across both forges
+    // - "required status" - GitHub status check errors
+    // - "review" - GitHub review requirement errors
+    // - "approval" - GitLab approval errors
+    //
+    // If you encounter a branch protection error that isn't caught here,
+    // verify the actual error message first, then add it with a comment.
+    if msg.contains("branch protection")
+        || msg.contains("base branch policy")
+        || msg.contains("protected branch")
+        || msg.contains("required status")
+        || msg.contains("review")
+        || msg.contains("approval")
+    {
+        return false;
+    }
+
+    // Actual merge conflict patterns (these indicate git conflicts)
     // GitHub error patterns
     msg.contains("not mergeable")
         || msg.contains("cannot be cleanly created")
@@ -1597,5 +1624,41 @@ mod tests {
         // With i > 0, proactive rebase should happen
         let should_do_proactive = proactive_rebase && 1 > 0;
         assert!(should_do_proactive);
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_branch_protection() {
+        let err = anyhow::anyhow!("the base branch policy prohibits the merge");
+        assert!(!is_not_mergeable_error(&err));
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_branch_protection_keyword() {
+        let err = anyhow::anyhow!("blocked by branch protection rules");
+        assert!(!is_not_mergeable_error(&err));
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_protected_branch() {
+        let err = anyhow::anyhow!("cannot push to protected branch");
+        assert!(!is_not_mergeable_error(&err));
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_required_status() {
+        let err = anyhow::anyhow!("required status checks not met");
+        assert!(!is_not_mergeable_error(&err));
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_reviews() {
+        let err = anyhow::anyhow!("PR requires reviews that haven't been approved");
+        assert!(!is_not_mergeable_error(&err));
+    }
+
+    #[test]
+    fn test_is_not_mergeable_error_excludes_gitlab_approval() {
+        let err = anyhow::anyhow!("MR requires approval before merging");
+        assert!(!is_not_mergeable_error(&err));
     }
 }
