@@ -90,6 +90,91 @@ fn test_something() -> Result<()> {
 
 **If you catch yourself writing implementation before a failing test exists, STOP immediately and write the test first.**
 
+### 5. 💎 UX Principles for Enterprise-Grade CLI
+
+**Diamond is a professional tool for engineering teams. UX is not an afterthought.**
+
+For comprehensive guidelines, see `agent_notes/ux_principles/`. These are the critical rules:
+
+#### Error Messages
+
+**Format** (inform, don't prescribe):
+```
+[WHAT] is [PROBLEM]:
+  [SPECIFIC DETAILS]
+```
+
+**Do**:
+- ✅ Show information you already have (don't make users run extra commands)
+- ✅ Use real values, not `<placeholders>`
+- ✅ Hide implementation details (no exit codes, internal commands, stack traces)
+- ✅ Professional tone (no emoji spam, no "Pwease" language)
+
+**Don't**:
+- ❌ Assume user intent (especially destructive actions like deletion)
+- ❌ Suggest commands when multiple valid approaches exist
+- ❌ Make users run another command for info you already queried
+- ❌ Give users numbered lists of 5 options (minimize cognitive load)
+
+**Example** (worktree conflict):
+```rust
+// ❌ Bad - assumes destructive intent
+bail!("Branch '{}' is already checked out at:\n  {}\n\nTo remove that worktree:\n  git worktree remove {}",
+    name, path, path);
+
+// ✅ Good - informative without prescribing
+bail!("Branch '{}' is already checked out at:\n  {}", name, path);
+```
+
+**Why**: Most worktree users have persistent worktrees they reuse. Suggesting deletion assumes the wrong (and rare) intent.
+
+#### Interactive Features - CRITICAL TTY Detection
+
+**ALL interactive code MUST detect TTY before prompting or launching TUI**:
+
+```rust
+// Before launching TUI (dm log, dm checkout with no args)
+if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+    anyhow::bail!("This command requires a terminal. Use --format=short for scripts.");
+}
+
+// Before prompting for confirmation
+if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+    anyhow::bail!("This command requires confirmation. Use --force to skip.");
+}
+```
+
+**Why**: Tests, CI, and scripts run in non-TTY environments. Without this check, they hang forever waiting for input that never comes.
+
+#### Output and Consistency
+
+**Silent success, loud failure**:
+- Operations that succeed normally show minimal output
+- Only show progress for operations >2 seconds
+- Reserve color for errors (red), warnings (yellow), success confirmations (green)
+
+**Consistent vocabulary**:
+- **Branch** (not "ref" or "head")
+- **Stack** (the tree of branches)
+- **Trunk** (main/master branch)
+- **--force** for skipping confirmations (not `--yes`, `--skip-prompt`, `--no-interactive`)
+
+#### UX Validation Checklist
+
+Before shipping a feature:
+
+- [ ] Error messages pass "3am test" (can user fix without Googling?)
+- [ ] No `<placeholders>` in suggested commands
+- [ ] TTY detection for all interactive features
+- [ ] Consistent flag usage (`--force`, not `--yes`)
+- [ ] Silent success (don't say "Successfully completed!" for normal operations)
+- [ ] No assumptions about destructive intent
+
+**For detailed guidance**: See `agent_notes/ux_principles/`
+- `error_messages.md` - Comprehensive error message principles
+- `cli_design.md` - CLI design patterns and anti-patterns
+- `lessons_learned.md` - Real mistakes and how we fixed them
+
 ## Project Structure & Module Organization
 
 - `Cargo.toml` / `Cargo.lock`: Rust workspace metadata and dependency locks.
@@ -102,6 +187,7 @@ fn test_something() -> Result<()> {
 - `src/validation.rs`: Integrity checks for stack data and git state.
 - `src/forge/`: Hosting provider integrations (e.g., GitHub).
 - `agent_notes/`: Design/architecture notes (not part of the shipped binary).
+  - `agent_notes/ux_principles/`: Comprehensive UX guidelines for error messages, CLI design, and lessons learned.
 
 ## Build, Test, and Development Commands
 
