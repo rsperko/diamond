@@ -1,5 +1,7 @@
 //! Core submission logic for branches and stacks.
 
+use std::io::Write;
+
 use anyhow::{Context, Result};
 use colored::Colorize;
 
@@ -10,6 +12,14 @@ use crate::program_name::program_name;
 use crate::ref_store::RefStore;
 
 use super::PrCache;
+
+/// Result of submitting a single branch
+#[derive(Debug)]
+pub(super) struct SubmitResult {
+    pub branch: String,
+    pub url: String,
+    pub created: bool, // true if created, false if updated
+}
 
 /// Get PR title for a branch - uses tip commit message or falls back to branch name
 pub(super) fn get_pr_title_for_branch(gateway: &GitGateway, branch: &str) -> Result<String> {
@@ -122,10 +132,10 @@ pub(super) fn submit_branch(
     forge: &dyn Forge,
     force: bool,
     options: &PrOptions,
-    created_urls: &mut Vec<String>,
     update_only: bool,
     pr_cache: &PrCache,
-) -> Result<()> {
+    progress: Option<(usize, usize)>, // (current, total) for progress counter
+) -> Result<Option<SubmitResult>> {
     // First, ensure any diverged ancestor branches are pushed.
     // This prevents PRs from showing incorrect diffs when the stack was rebased locally.
     push_diverged_ancestors(branch, ref_store, gateway, forge, force, pr_cache)?;
@@ -150,12 +160,20 @@ pub(super) fn submit_branch(
 
     if let Some(ref pr_info) = existing_pr {
         // PR exists - push updates
-        println!(
-            "{} Updating PR #{} for {}...",
+        let progress_str = if let Some((current, total)) = progress {
+            format!("[{}/{}] ", current, total)
+        } else {
+            String::new()
+        };
+
+        print!(
+            "{} {}Updating {} (PR #{})... ",
             "→".blue(),
-            pr_info.number,
-            branch.green()
+            progress_str,
+            branch.green(),
+            pr_info.number
         );
+        std::io::stdout().flush().ok();
 
         // Check for remote divergence before pushing (safety check)
         if !force {
@@ -167,17 +185,15 @@ pub(super) fn submit_branch(
 
         // Still push diamond ref in case it changed
         if let Err(e) = gateway.push_diamond_ref(branch) {
-            eprintln!("  {} Could not push diamond ref: {}", "!".yellow(), e);
+            eprintln!("\n  {} Could not push diamond ref: {}", "!".yellow(), e);
         }
 
         // Handle publish - mark draft PR as ready for review
         if options.publish {
             match forge.mark_pr_ready(branch) {
-                Ok(()) => {
-                    println!("  {} Marked as ready for review", "✓".green());
-                }
+                Ok(()) => {}
                 Err(e) => {
-                    eprintln!("  {} Could not mark as ready: {}", "!".yellow(), e);
+                    eprintln!("\n  {} Could not mark as ready: {}", "!".yellow(), e);
                 }
             }
         }
@@ -185,28 +201,26 @@ pub(super) fn submit_branch(
         // Handle merge-when-ready - enable auto-merge
         if options.merge_when_ready {
             match forge.enable_auto_merge(branch, "squash") {
-                Ok(()) => {
-                    println!("  {} Auto-merge enabled", "✓".green());
-                }
+                Ok(()) => {}
                 Err(e) => {
-                    eprintln!("  {} Could not enable auto-merge: {}", "!".yellow(), e);
+                    eprintln!("\n  {} Could not enable auto-merge: {}", "!".yellow(), e);
                 }
             }
         }
 
-        println!(
-            "{} Updated {}: {}",
-            "✓".green().bold(),
-            branch.green(),
-            pr_info.url.blue()
-        );
-        return Ok(());
+        println!("{} Updated", "✓".green());
+
+        return Ok(Some(SubmitResult {
+            branch: branch.to_string(),
+            url: pr_info.url.clone(),
+            created: false,
+        }));
     }
 
     // No PR exists - check if we should skip (update_only mode)
     if update_only {
         println!("{} Skipping {} (no PR, --update-only)", "⏭".dimmed(), branch.yellow());
-        return Ok(());
+        return Ok(None);
     }
 
     // Ensure parent branch has a PR before creating one for this branch
@@ -233,7 +247,7 @@ pub(super) fn submit_branch(
                 );
             }
             println!("Parent branch {} needs a PR first, submitting it...\n", base.yellow());
-            // Recursively submit the parent branch
+            // Recursively submit the parent branch (no progress for recursive calls)
             submit_branch(
                 base,
                 ref_store,
@@ -241,9 +255,9 @@ pub(super) fn submit_branch(
                 forge,
                 force,
                 options,
-                created_urls,
                 update_only,
                 pr_cache,
+                None, // No progress counter for recursive calls
             )?;
             println!(); // Add spacing after parent submission
         }
@@ -254,18 +268,32 @@ pub(super) fn submit_branch(
         check_branch_sync_state(gateway, branch)?;
     }
 
-    // Now push and create PR for this branch
-    println!("Pushing {} → {}...", branch.green(), gateway.remote());
+    // Build progress string
+    let progress_str = if let Some((current, total)) = progress {
+        format!("[{}/{}] ", current, total)
+    } else {
+        String::new()
+    };
+
+    // Show one-line output for push and PR creation
+    let draft_str = if options.draft { " (draft)" } else { "" };
+    print!(
+        "{} {}Creating{} {} → {}... ",
+        "→".blue(),
+        progress_str,
+        draft_str,
+        branch.green(),
+        base.blue()
+    );
+    std::io::stdout().flush().ok();
+
+    // Push the branch
     forge.push_branch(branch, force)?;
 
     // Push diamond parent ref for collaboration (Phase 2)
     if let Err(e) = gateway.push_diamond_ref(branch) {
-        eprintln!("  {} Could not push diamond ref: {}", "!".yellow(), e);
+        eprintln!("\n  {} Could not push diamond ref: {}", "!".yellow(), e);
     }
-
-    // Create new PR
-    let draft_str = if options.draft { " (draft)" } else { "" };
-    println!("Creating PR{}: {} → {}...", draft_str, branch.green(), base.blue());
 
     // Use tip commit message as title, fall back to branch name if no commits
     let title = get_pr_title_for_branch(gateway, branch)?;
@@ -281,21 +309,22 @@ pub(super) fn submit_branch(
     // Handle merge-when-ready for new PRs
     if options.merge_when_ready {
         match forge.enable_auto_merge(branch, "squash") {
-            Ok(()) => {
-                println!("  {} Auto-merge enabled", "✓".green());
-            }
+            Ok(()) => {}
             Err(e) => {
-                eprintln!("  {} Could not enable auto-merge: {}", "!".yellow(), e);
+                eprintln!("\n  {} Could not enable auto-merge: {}", "!".yellow(), e);
             }
         }
     }
 
-    println!("{} Created PR: {}", "✓".green().bold(), url.blue());
+    // Extract PR number from URL for display
+    let pr_number = url.split('/').next_back().unwrap_or("?");
+    println!("{} Created PR #{}", "✓".green(), pr_number);
 
-    // Track newly created PR for opening in browser
-    created_urls.push(url);
-
-    Ok(())
+    Ok(Some(SubmitResult {
+        branch: branch.to_string(),
+        url,
+        created: true,
+    }))
 }
 
 /// Submit all branches in the stack (parent-first order)
@@ -307,10 +336,9 @@ pub(super) fn submit_stack(
     forge: &dyn Forge,
     force: bool,
     options: &PrOptions,
-    created_urls: &mut Vec<String>,
     update_only: bool,
     pr_cache: &PrCache,
-) -> Result<()> {
+) -> Result<Vec<SubmitResult>> {
     // Collect all descendants in DFS order (parent-first)
     let mut to_submit = vec![branch.to_string()];
     let mut i = 0;
@@ -323,26 +351,25 @@ pub(super) fn submit_stack(
         i += 1;
     }
 
-    println!("Submitting stack of {} branches:", to_submit.len().to_string().yellow());
-    for b in &to_submit {
-        println!("  • {}", b.green());
-    }
-    println!();
+    let total = to_submit.len();
+    let mut results = Vec::new();
 
-    // Submit each branch in order (using pre-fetched PR cache)
-    for b in &to_submit {
-        submit_branch(
+    // Submit each branch in order with progress counters
+    for (idx, b) in to_submit.iter().enumerate() {
+        if let Some(result) = submit_branch(
             b,
             ref_store,
             gateway,
             forge,
             force,
             options,
-            created_urls,
             update_only,
             pr_cache,
-        )?;
+            Some((idx + 1, total)), // Progress: (current, total)
+        )? {
+            results.push(result);
+        }
     }
 
-    Ok(())
+    Ok(results)
 }

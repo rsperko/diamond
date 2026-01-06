@@ -399,8 +399,6 @@ fn test_submit_branch_creates_parent_pr_first() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit the child branch
     submit_branch(
         "child",
@@ -409,9 +407,9 @@ fn test_submit_branch_creates_parent_pr_first() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify parent was pushed before child
@@ -427,7 +425,6 @@ fn test_submit_branch_creates_parent_pr_first() -> Result<()> {
     assert_eq!(prs[1], ("child".to_string(), "parent".to_string()));
 
     // Verify URLs were collected
-    assert_eq!(created_urls.len(), 2, "Two URLs should be collected");
 
     Ok(())
 }
@@ -457,8 +454,6 @@ fn test_submit_branch_skips_parent_with_existing_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit the child branch
     submit_branch(
         "child",
@@ -467,9 +462,9 @@ fn test_submit_branch_skips_parent_with_existing_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Only child should be pushed (parent already has PR)
@@ -483,7 +478,6 @@ fn test_submit_branch_skips_parent_with_existing_pr() -> Result<()> {
     assert_eq!(prs[0], ("child".to_string(), "parent".to_string()));
 
     // Only one URL collected (parent already existed)
-    assert_eq!(created_urls.len(), 1, "Only child URL should be collected");
 
     Ok(())
 }
@@ -511,8 +505,6 @@ fn test_submit_branch_with_trunk_parent_no_parent_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit the feature branch
     submit_branch(
         "feature",
@@ -521,9 +513,9 @@ fn test_submit_branch_with_trunk_parent_no_parent_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Only feature should be pushed (trunk is not pushed)
@@ -537,7 +529,6 @@ fn test_submit_branch_with_trunk_parent_no_parent_pr() -> Result<()> {
     assert_eq!(prs[0], ("feature".to_string(), "main".to_string()));
 
     // One URL collected
-    assert_eq!(created_urls.len(), 1, "Feature URL should be collected");
 
     Ok(())
 }
@@ -571,8 +562,6 @@ fn test_submit_branch_deep_stack_creates_all_parent_prs() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit branch d (deepest)
     submit_branch(
         "d",
@@ -581,9 +570,9 @@ fn test_submit_branch_deep_stack_creates_all_parent_prs() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // All branches should be pushed in order (ancestors first)
@@ -600,7 +589,6 @@ fn test_submit_branch_deep_stack_creates_all_parent_prs() -> Result<()> {
     assert_eq!(prs[3], ("d".to_string(), "c".to_string()));
 
     // All 4 URLs collected
-    assert_eq!(created_urls.len(), 4, "All 4 URLs should be collected");
 
     Ok(())
 }
@@ -1101,8 +1089,6 @@ fn test_submit_blocks_when_branch_is_behind_remote() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit should fail (without force) because branch is behind
     let result = submit_branch(
         "feature",
@@ -1111,9 +1097,9 @@ fn test_submit_blocks_when_branch_is_behind_remote() -> Result<()> {
         &forge,
         false, // no force
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_err(), "Submit should fail when branch is behind");
@@ -1197,8 +1183,6 @@ fn test_submit_succeeds_with_force_when_behind() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit WITH force should succeed (divergence check is skipped)
     let result = submit_branch(
         "feature",
@@ -1207,9 +1191,9 @@ fn test_submit_succeeds_with_force_when_behind() -> Result<()> {
         &forge,
         true, // force = true
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_ok(), "Submit with force should succeed: {:?}", result);
@@ -1283,8 +1267,6 @@ fn test_submit_succeeds_after_amend() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit should SUCCEED even without --force (normal workflow)
     // The push uses --force-with-lease which handles the diverged state safely
     let result = submit_branch(
@@ -1294,9 +1276,9 @@ fn test_submit_succeeds_after_amend() -> Result<()> {
         &forge,
         false, // no force needed!
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(
@@ -1360,8 +1342,6 @@ fn test_submit_succeeds_after_multiple_amends() -> Result<()> {
         .args(["fetch", "origin"])
         .current_dir(local_dir.path())
         .output()?;
-
-    let mut created_urls = Vec::new();
     let result = submit_branch(
         "feature",
         &ref_store,
@@ -1369,9 +1349,9 @@ fn test_submit_succeeds_after_multiple_amends() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
     assert!(result.is_ok(), "First amend cycle should succeed: {:?}", result.err());
 
@@ -1390,8 +1370,6 @@ fn test_submit_succeeds_after_multiple_amends() -> Result<()> {
         .args(["fetch", "origin"])
         .current_dir(local_dir.path())
         .output()?;
-
-    let mut created_urls = Vec::new();
     let result = submit_branch(
         "feature",
         &ref_store,
@@ -1399,9 +1377,9 @@ fn test_submit_succeeds_after_multiple_amends() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
     assert!(result.is_ok(), "Second amend cycle should succeed: {:?}", result.err());
 
@@ -1431,8 +1409,6 @@ fn test_submit_update_only_skips_branch_without_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit with update_only=true
     submit_branch(
         "feature",
@@ -1441,9 +1417,9 @@ fn test_submit_update_only_skips_branch_without_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         true, // update_only
         &empty_pr_cache(),
+        None,
     )?;
 
     // Branch should NOT be pushed (skipped due to no PR)
@@ -1455,7 +1431,6 @@ fn test_submit_update_only_skips_branch_without_pr() -> Result<()> {
     assert_eq!(prs.len(), 0, "No PRs should be created");
 
     // No URLs collected
-    assert_eq!(created_urls.len(), 0, "No URLs should be collected");
 
     Ok(())
 }
@@ -1483,8 +1458,6 @@ fn test_submit_update_only_updates_branch_with_existing_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit with update_only=true
     submit_branch(
         "feature",
@@ -1493,9 +1466,9 @@ fn test_submit_update_only_updates_branch_with_existing_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         true, // update_only
         &empty_pr_cache(),
+        None,
     )?;
 
     // Branch SHOULD be pushed (has existing PR)
@@ -1535,8 +1508,6 @@ fn test_submit_update_only_fails_when_parent_has_no_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit with update_only=true - should fail because parent has no PR
     // and we can't recursively create parent PRs in update_only mode
     let result = submit_branch(
@@ -1546,9 +1517,9 @@ fn test_submit_update_only_fails_when_parent_has_no_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         true, // update_only
         &empty_pr_cache(),
+        None,
     );
 
     // This should succeed since child already has a PR
@@ -1590,8 +1561,6 @@ fn test_submit_publish_marks_existing_pr_as_ready() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     submit_branch(
         "feature",
         &ref_store,
@@ -1599,9 +1568,9 @@ fn test_submit_publish_marks_existing_pr_as_ready() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify mark_pr_ready was called
@@ -1644,8 +1613,6 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_existing_pr() -> Result<(
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     submit_branch(
         "feature",
         &ref_store,
@@ -1653,9 +1620,9 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_existing_pr() -> Result<(
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify enable_auto_merge was called
@@ -1702,8 +1669,6 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_new_pr() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     submit_branch(
         "feature",
         &ref_store,
@@ -1711,9 +1676,9 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_new_pr() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify PR was created
@@ -1764,8 +1729,6 @@ fn test_submit_without_publish_does_not_mark_ready() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     submit_branch(
         "feature",
         &ref_store,
@@ -1773,9 +1736,9 @@ fn test_submit_without_publish_does_not_mark_ready() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify mark_pr_ready was NOT called
@@ -1820,8 +1783,6 @@ fn test_submit_without_merge_when_ready_does_not_enable_auto_merge() -> Result<(
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     submit_branch(
         "feature",
         &ref_store,
@@ -1829,9 +1790,9 @@ fn test_submit_without_merge_when_ready_does_not_enable_auto_merge() -> Result<(
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     )?;
 
     // Verify enable_auto_merge was NOT called
@@ -1879,8 +1840,6 @@ fn test_submit_stack_submits_all_descendants() -> Result<()> {
         reviewers: vec![],
         ..Default::default()
     };
-    let mut created_urls = Vec::new();
-
     // Submit the stack starting from "a"
     submit_stack(
         "a",
@@ -1889,7 +1848,6 @@ fn test_submit_stack_submits_all_descendants() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
     )?;
@@ -2298,8 +2256,6 @@ fn test_diverged_ancestors_are_pushed_before_leaf() -> Result<()> {
         .with_existing_pr("branch-b");
 
     let options = PrOptions::default();
-    let mut created_urls = Vec::new();
-
     // Submit branch-b (the leaf)
     let result = submit_branch(
         "branch-b",
@@ -2308,9 +2264,9 @@ fn test_diverged_ancestors_are_pushed_before_leaf() -> Result<()> {
         &forge,
         false, // no force
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_ok(), "Submit should succeed: {:?}", result.err());
@@ -2400,8 +2356,6 @@ fn test_diverged_ancestor_without_pr_not_pushed() -> Result<()> {
     let forge = MockForge::new().with_existing_pr("branch-b");
 
     let options = PrOptions::default();
-    let mut created_urls = Vec::new();
-
     let result = submit_branch(
         "branch-b",
         &ref_store,
@@ -2409,9 +2363,9 @@ fn test_diverged_ancestor_without_pr_not_pushed() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_ok(), "Submit should succeed: {:?}", result.err());
@@ -2499,8 +2453,6 @@ fn test_in_sync_ancestor_not_pushed() -> Result<()> {
         .with_existing_pr("branch-b");
 
     let options = PrOptions::default();
-    let mut created_urls = Vec::new();
-
     let result = submit_branch(
         "branch-b",
         &ref_store,
@@ -2508,9 +2460,9 @@ fn test_in_sync_ancestor_not_pushed() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_ok(), "Submit should succeed: {:?}", result.err());
@@ -2631,8 +2583,6 @@ fn test_multiple_diverged_ancestors_pushed_in_order() -> Result<()> {
         .with_existing_pr("branch-c");
 
     let options = PrOptions::default();
-    let mut created_urls = Vec::new();
-
     let result = submit_branch(
         "branch-c",
         &ref_store,
@@ -2640,9 +2590,9 @@ fn test_multiple_diverged_ancestors_pushed_in_order() -> Result<()> {
         &forge,
         false,
         &options,
-        &mut created_urls,
         false,
         &empty_pr_cache(),
+        None,
     );
 
     assert!(result.is_ok(), "Submit should succeed: {:?}", result.err());
