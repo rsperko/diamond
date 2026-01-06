@@ -28,6 +28,7 @@ pub fn run(
     reset_author: bool,
     interactive_rebase: bool,
     into: Option<String>,
+    patch: bool,
 ) -> Result<()> {
     let gateway = GitGateway::new()?;
     let ref_store = RefStore::new()?;
@@ -38,6 +39,9 @@ pub fn run(
     // Validate mutually exclusive flags
     if all && update {
         anyhow::bail!("Cannot use both -a (all) and -u (update) flags together");
+    }
+    if patch && (all || update) {
+        anyhow::bail!("Cannot use --patch with -a/--all or -u/--update (patch mode is interactive)");
     }
 
     let current_branch = gateway.get_current_branch_name()?;
@@ -72,6 +76,7 @@ pub fn run(
             all,
             update,
             message,
+            patch,
         );
     }
 
@@ -104,12 +109,16 @@ pub fn run(
     } else if update {
         gateway.stage_updates()?;
         println!("Staged tracked file updates");
+    } else if patch {
+        gateway.stage_patch()?;
+        println!("Staged selected hunks");
     }
 
     // Handle --reset-author
     if reset_author {
         gateway.amend_reset_author(message.as_deref())?;
         println!("Reset author on commit");
+        gateway.show_commit_diffstat()?;
         restack::restack_children(&current_branch)?;
         return Ok(());
     }
@@ -118,6 +127,7 @@ pub fn run(
     if edit {
         gateway.amend_with_editor()?;
         println!("Amended commit with edited message");
+        gateway.show_commit_diffstat()?;
         restack::restack_children(&current_branch)?;
         return Ok(());
     }
@@ -129,18 +139,21 @@ pub fn run(
             // -c with -m: create new commit with message
             gateway.commit(&msg)?;
             println!("Committed: {}", msg);
+            gateway.show_commit_diffstat()?;
             false
         }
         (true, None) => {
             // -c without -m: create new commit using editor
             gateway.commit_with_editor()?;
             println!("Created new commit");
+            gateway.show_commit_diffstat()?;
             false
         }
         (false, Some(msg)) => {
             // -m without -c: amend with new message
             gateway.amend_commit(Some(&msg))?;
             println!("Amended commit: {}", msg);
+            gateway.show_commit_diffstat()?;
             restack::restack_children(&current_branch)?;
             true
         }
@@ -148,6 +161,7 @@ pub fn run(
             // No -c, no -m: amend preserving existing message
             gateway.amend_commit(None)?;
             println!("Amended commit (message preserved)");
+            gateway.show_commit_diffstat()?;
             restack::restack_children(&current_branch)?;
             true
         }
@@ -160,6 +174,7 @@ pub fn run(
 }
 
 /// Handle --into flag: amend changes into a downstack branch
+#[allow(clippy::too_many_arguments)]
 fn run_into(
     gateway: &GitGateway,
     ref_store: &RefStore,
@@ -168,6 +183,7 @@ fn run_into(
     all: bool,
     update: bool,
     message: Option<String>,
+    patch: bool,
 ) -> Result<()> {
     // Verify target branch exists
     if !gateway.branch_exists(target_branch)? {
@@ -203,6 +219,9 @@ fn run_into(
     } else if update {
         gateway.stage_updates()?;
         println!("Staged tracked file updates");
+    } else if patch {
+        gateway.stage_patch()?;
+        println!("Staged selected hunks");
     }
 
     // Amend the commit
@@ -210,10 +229,12 @@ fn run_into(
         Some(msg) => {
             gateway.amend_commit(Some(&msg))?;
             println!("Amended commit on '{}': {}", target_branch, msg);
+            gateway.show_commit_diffstat()?;
         }
         None => {
             gateway.amend_commit(None)?;
             println!("Amended commit on '{}' (message preserved)", target_branch);
+            gateway.show_commit_diffstat()?;
         }
     }
 
@@ -292,7 +313,7 @@ mod tests {
         }
 
         // Modify without -a and without message (should amend)
-        run(false, false, None, false, false, false, false, None)?;
+        run(false, false, None, false, false, false, false, None, false)?;
 
         // Verify message was preserved
         let head = repo.head()?.peel_to_commit()?;
@@ -329,6 +350,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )?;
 
         // Verify commit was amended (same parent, different hash)
@@ -368,6 +390,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )?;
 
         // Verify a new commit was created (2 commits total after Initial)
@@ -401,6 +424,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )?;
 
         // Verify both files are in commit
@@ -440,6 +464,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )?;
 
         // Verify we AMENDED (not created new) - should still have same parent
@@ -469,7 +494,7 @@ mod tests {
         fs::write(dir.path().join("file2.txt"), "new content")?;
 
         // Modify with -a but no message (should amend and preserve message)
-        run(true, false, None, false, false, false, false, None)?;
+        run(true, false, None, false, false, false, false, None, false)?;
 
         // Verify message was preserved
         let head = repo.head()?.peel_to_commit()?;
@@ -515,6 +540,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
 
         assert!(result.is_err());
@@ -566,6 +592,7 @@ mod tests {
             false,
             false,
             Some("parent".to_string()),
+            false,
         )?;
 
         // Verify we're back on child
@@ -610,6 +637,7 @@ mod tests {
             false,
             false,
             Some("nonexistent".to_string()),
+            false,
         );
 
         assert!(result.is_err());
@@ -648,6 +676,7 @@ mod tests {
             false,
             false,
             Some("branch-a".to_string()),
+            false,
         );
 
         assert!(result.is_err());
@@ -735,6 +764,7 @@ mod tests {
             false,
             false,
             Some("parent".to_string()),
+            false,
         );
 
         assert!(result.is_err());
@@ -781,6 +811,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         )?;
 
         // Verify the commit only has tracked.txt
@@ -809,6 +840,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
 
         assert!(result.is_err());
@@ -846,6 +878,7 @@ mod tests {
             false,
             false,
             None,
+            false,
         );
 
         assert!(result.is_err());
@@ -907,6 +940,7 @@ mod tests {
             false, // reset_author
             false, // interactive_rebase
             None,  // into
+            false, // patch
         );
 
         assert!(
@@ -966,6 +1000,7 @@ mod tests {
             false, // reset_author
             false, // interactive_rebase
             None,  // into
+            false, // patch
         );
 
         assert!(result.is_ok());
