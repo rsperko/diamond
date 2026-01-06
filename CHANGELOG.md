@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Homebrew tap for macOS installation**: Diamond can now be installed via `brew install rsperko/tap/diamond` on macOS, removing the need for a Rust toolchain.
+
 ## [0.1.1] - 2026-01-04
 
 ### Changed
