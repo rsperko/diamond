@@ -162,7 +162,7 @@ pub fn run(name: Option<String>, reparent: bool, force: bool, upstack: bool, dow
     // If deleting current branch, checkout parent first
     if current == name {
         if let Some(parent) = &grandparent {
-            gateway.checkout_branch(parent)?;
+            gateway.checkout_branch_safe(parent)?;
             println!("Checked out parent branch: {}", parent);
         } else {
             anyhow::bail!("Cannot delete current branch '{}' without a parent to checkout", name);

@@ -145,12 +145,12 @@ impl GitBackend for Git2Backend {
         let tree = commit.tree().context("Failed to get commit tree")?;
 
         // First checkout the tree to update working directory
-        // Use recreate_missing and remove_untracked for clean branch switch
+        // Use safe mode to preserve uncommitted changes and untracked files
         let mut checkout_builder = git2::build::CheckoutBuilder::new();
         checkout_builder
             .safe() // Don't overwrite uncommitted changes
-            .recreate_missing(true) // Recreate missing files from target tree
-            .remove_untracked(true); // Remove files not in target tree
+            .recreate_missing(true); // Recreate missing files from target tree
+                                     // NOTE: We do NOT use .remove_untracked(true) - git never deletes untracked files on checkout!
 
         self.repo
             .checkout_tree(tree.as_object(), Some(&mut checkout_builder))

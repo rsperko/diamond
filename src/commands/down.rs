@@ -28,8 +28,8 @@ pub fn run(steps: usize) -> Result<()> {
             }
         })?;
 
-        // Checkout parent
-        gateway.checkout_branch(&parent)?;
+        // Checkout parent safely (fail if uncommitted changes)
+        gateway.checkout_branch_safe(&parent)?;
 
         if steps == 1 {
             println!("Switched to parent branch: {}", parent);
