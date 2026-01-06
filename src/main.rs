@@ -155,6 +155,9 @@ Examples:
         /// Insert between current branch and its child (auto-detects if one child, or specify child explicitly)
         #[arg(short = 'i', long, value_name = "CHILD", num_args = 0..=1, default_missing_value = "")]
         insert: Option<String>,
+        /// Pick hunks to stage before committing (interactive)
+        #[arg(short = 'p', long)]
+        patch: bool,
     },
     /// Visualize your stack
     #[command(visible_alias = "l")]
@@ -204,6 +207,9 @@ Examples:
         /// Amend changes into a downstack branch instead of current
         #[arg(long, value_name = "BRANCH")]
         into: Option<String>,
+        /// Pick hunks to stage before committing (interactive)
+        #[arg(short = 'p', long)]
+        patch: bool,
     },
     /// Push branches and create PRs
     #[command(
@@ -738,7 +744,8 @@ async fn main() {
                 update,
                 message,
                 insert,
-            } => commands::create::run(name.clone(), *all, *update, message.clone(), insert.clone()),
+                patch,
+            } => commands::create::run(name.clone(), *all, *update, message.clone(), insert.clone(), *patch),
             Commands::Checkout {
                 name,
                 trunk,
@@ -768,6 +775,7 @@ async fn main() {
                 reset_author,
                 interactive_rebase,
                 into,
+                patch,
             } => commands::modify::run(
                 *all,
                 *update,
@@ -777,6 +785,7 @@ async fn main() {
                 *reset_author,
                 *interactive_rebase,
                 into.clone(),
+                *patch,
             ),
             Commands::Submit {
                 stack,
@@ -919,7 +928,7 @@ async fn main() {
             },
             Commands::Doctor { fix, fix_viz } => commands::doctor::run(*fix, *fix_viz),
             Commands::Gc { max_age, keep, dry_run } => commands::gc::run(*max_age, *keep, *dry_run),
-            Commands::Cleanup { force } => commands::cleanup::run(*force),
+            Commands::Cleanup { force } => commands::cleanup::run(*force).await,
             Commands::Undo { branch, list, force } => commands::undo::run(branch.clone(), *list, *force),
             Commands::History { count, all } => commands::history::run(if *all { Some(0) } else { *count }),
             Commands::Completion { shell } => commands::completion::run(*shell),

@@ -216,6 +216,135 @@ pub fn multi_spinner(mp: &MultiProgress, message: &str) -> ProgressBar {
     pb
 }
 
+// ──────────────────────────────────────────────────────────────
+// Sync-specific progress (for large stack operations)
+// ──────────────────────────────────────────────────────────────
+
+/// Threshold for showing progress bar vs individual spinners
+const PROGRESS_BAR_THRESHOLD: usize = 10;
+
+/// Progress tracking for sync/restack operations
+pub struct SyncProgress {
+    /// Overall progress bar (for 10+ branches)
+    progress_bar: Option<ProgressBar>,
+    /// Current operation spinner
+    current_spinner: Option<ProgressBar>,
+    /// Total number of branches
+    total: usize,
+    /// Number of completed branches
+    completed: usize,
+}
+
+impl SyncProgress {
+    /// Create a new sync progress tracker.
+    ///
+    /// For <10 branches, uses individual spinners (current behavior).
+    /// For 10+ branches, shows an overall progress bar.
+    pub fn new(total: usize, operation: &str) -> Self {
+        if !std::io::stdout().is_terminal() || total < PROGRESS_BAR_THRESHOLD {
+            // Non-TTY or small stack: no progress bar
+            return Self {
+                progress_bar: None,
+                current_spinner: None,
+                total,
+                completed: 0,
+            };
+        }
+
+        // Large stack: show progress bar
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.blue} {msg} [{bar:30.cyan/dim}] {pos}/{len}")
+                .expect("Invalid progress bar template")
+                .tick_chars(SPINNER_FRAMES)
+                .progress_chars("━━╺"),
+        );
+        pb.set_message(operation.to_string());
+        pb.enable_steady_tick(Duration::from_millis(80));
+
+        Self {
+            progress_bar: Some(pb),
+            current_spinner: None,
+            total,
+            completed: 0,
+        }
+    }
+
+    /// Start processing a branch (show spinner or update progress message).
+    pub fn start_branch(&mut self, branch: &str) -> Option<ProgressBar> {
+        if let Some(ref pb) = self.progress_bar {
+            // Progress bar mode: update message with current branch
+            pb.set_message(format!("Rebasing {} ({}/{})", branch, self.completed + 1, self.total));
+            None // Don't create individual spinner
+        } else {
+            // Spinner mode: create individual spinner
+            let spin = spinner(&format!("Rebasing {}...", branch));
+            self.current_spinner = spin.clone();
+            spin
+        }
+    }
+
+    /// Finish current branch with success.
+    pub fn finish_branch_success(&mut self, spinner: Option<ProgressBar>, message: &str) {
+        self.completed += 1;
+
+        if let Some(ref pb) = self.progress_bar {
+            // Progress bar mode: just increment
+            pb.inc(1);
+        } else {
+            // Spinner mode: finish individual spinner
+            spinner_success(spinner, message);
+        }
+    }
+
+    /// Finish current branch with warning.
+    pub fn finish_branch_warning(&mut self, spinner: Option<ProgressBar>, message: &str) {
+        self.completed += 1;
+
+        if let Some(ref pb) = self.progress_bar {
+            // Progress bar mode: just increment
+            pb.inc(1);
+        } else {
+            // Spinner mode: finish individual spinner
+            spinner_warning(spinner, message);
+        }
+    }
+
+    /// Finish current branch with error.
+    pub fn finish_branch_error(&mut self, spinner: Option<ProgressBar>, message: &str) {
+        self.completed += 1;
+
+        if let Some(ref pb) = self.progress_bar {
+            // Progress bar mode: just increment
+            pb.inc(1);
+        } else {
+            // Spinner mode: finish individual spinner
+            spinner_error(spinner, message);
+        }
+    }
+
+    /// Check if using progress bar mode.
+    pub fn is_progress_bar_mode(&self) -> bool {
+        self.progress_bar.is_some()
+    }
+
+    /// Finish the entire sync operation.
+    pub fn finish(self, message: &str) {
+        if let Some(pb) = self.progress_bar {
+            pb.finish_with_message(format!("{} {}", MARK_SUCCESS.green(), message));
+        }
+        // In spinner mode, no overall finish needed (each spinner finishes individually)
+    }
+
+    /// Finish with error.
+    pub fn finish_with_error(self, message: &str) {
+        if let Some(pb) = self.progress_bar {
+            pb.finish_with_message(format!("{} {}", MARK_ERROR.red(), message));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
