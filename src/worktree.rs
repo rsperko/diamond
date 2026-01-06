@@ -106,10 +106,31 @@ pub fn get_worktree_status() -> Result<WorktreeStatus> {
     })
 }
 
-/// Check if a specific branch is checked out in any other worktree.
-pub fn is_branch_in_other_worktree(branch: &str) -> Result<bool> {
-    let status = get_worktree_status()?;
-    Ok(status.branches_in_other_worktrees.contains(&branch.to_string()))
+/// Get the path where a specific branch is checked out (in another worktree).
+/// Returns None if the branch is not checked out in any other worktree.
+/// Returns None if worktree listing fails (e.g., not in a git repo or single worktree).
+pub fn get_worktree_path_for_branch(branch: &str) -> Result<Option<PathBuf>> {
+    // If listing worktrees fails (e.g., not in a git repo, repo deleted, single worktree),
+    // treat it as "no other worktrees exist" and return None instead of propagating error
+    let worktrees = match list_worktrees() {
+        Ok(wt) => wt,
+        Err(_) => return Ok(None),
+    };
+
+    for wt in worktrees {
+        // Skip current worktree and bare repos
+        if wt.is_current || wt.is_bare {
+            continue;
+        }
+
+        if let Some(ref wt_branch) = wt.branch {
+            if wt_branch == branch {
+                return Ok(Some(wt.path));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 /// Check if any branches in the list are checked out in other worktrees.
@@ -519,7 +540,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_is_branch_in_other_worktree() {
+    fn test_get_worktree_path_for_branch() {
         let dir = tempdir().unwrap();
         let main_path = dir.path().join("main");
         let wt_path = dir.path().join("worktree");
@@ -536,10 +557,19 @@ mod tests {
 
         let _guard = DirGuard::new(&main_path);
 
-        assert!(is_branch_in_other_worktree("locked-branch").unwrap());
-        assert!(!is_branch_in_other_worktree("nonexistent-branch").unwrap());
+        // Branch in other worktree should return the path
+        let path = get_worktree_path_for_branch("locked-branch").unwrap();
+        assert!(path.is_some());
+        // Canonicalize both paths for comparison (handles /var vs /private/var on macOS)
+        let returned_path = path.unwrap().canonicalize().unwrap();
+        let expected_path = wt_path.canonicalize().unwrap();
+        assert_eq!(returned_path, expected_path);
+
+        // Nonexistent branch should return None
+        assert!(get_worktree_path_for_branch("nonexistent-branch").unwrap().is_none());
+
         // master/main (current branch) should NOT be in other worktrees
-        assert!(!is_branch_in_other_worktree("master").unwrap());
+        assert!(get_worktree_path_for_branch("master").unwrap().is_none());
     }
 
     #[test]

@@ -44,15 +44,15 @@ pub fn run(
     // --trunk flag: go directly to trunk
     if trunk {
         let trunk_branch = ref_store.require_trunk()?;
-        gateway.checkout_branch_safe(&trunk_branch)?;
+        gateway.checkout_branch_worktree_safe(&trunk_branch)?;
         println!("Checked out trunk '{}'", trunk_branch);
         return Ok(());
     }
 
     // Non-interactive mode with explicit branch name
     if let Some(target) = name {
-        // Use safe checkout that respects uncommitted changes
-        gateway.checkout_branch_safe(&target)?;
+        // Use safe checkout that respects uncommitted changes AND worktree conflicts
+        gateway.checkout_branch_worktree_safe(&target)?;
 
         // Fetch diamond ref for this branch from remote (best effort)
         // This enables collaboration - we get the parent relationship from remote
@@ -76,8 +76,8 @@ pub fn run(
 
     if let Some(target) = selected {
         println!("Selected: {}", target);
-        // Use safe checkout that respects uncommitted changes
-        gateway.checkout_branch_safe(&target)?;
+        // Use safe checkout that respects uncommitted changes AND worktree conflicts
+        gateway.checkout_branch_worktree_safe(&target)?;
 
         // Fetch diamond ref for this branch from remote (best effort)
         let _ = gateway.fetch_diamond_ref_for_branch(&target);
@@ -467,6 +467,71 @@ mod tests {
         // Verify content is preserved
         let content = std::fs::read_to_string(&untracked_file)?;
         assert_eq!(content, "untracked content", "Untracked file content was modified");
+
+        Ok(())
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn test_checkout_branch_in_worktree_fails_with_helpful_message() -> Result<()> {
+        use std::process::Command;
+
+        let dir = tempdir()?;
+        let main_path = dir.path().join("main");
+        let wt_path = dir.path().join("worktree");
+
+        std::fs::create_dir_all(&main_path)?;
+        let _repo = init_test_repo(&main_path)?;
+
+        // Create a worktree with a branch
+        Command::new("git")
+            .args(["worktree", "add", wt_path.to_str().unwrap(), "-b", "locked-branch"])
+            .current_dir(&main_path)
+            .output()
+            .expect("git worktree add failed");
+
+        // Change to main worktree directory (required for git worktree commands)
+        std::env::set_current_dir(&main_path)?;
+
+        // Create test context after changing directory
+        let _ctx = TestRepoContext::new(&main_path);
+
+        let result = run(Some("locked-branch".to_string()), false, false, false, false);
+
+        // Should fail with a clear, informative error
+        assert!(
+            result.is_err(),
+            "Checkout should fail when branch is in another worktree"
+        );
+        let err_msg = result.unwrap_err().to_string();
+
+        // Verify error message shows the problem clearly
+        assert!(
+            err_msg.contains("already checked out at"),
+            "Error should explain the problem: {}",
+            err_msg
+        );
+
+        // Verify it shows the actual path (not a placeholder, no extra command needed)
+        assert!(
+            err_msg.contains(wt_path.to_str().unwrap()),
+            "Error should show the actual worktree path: {}",
+            err_msg
+        );
+
+        // Verify it doesn't assume user wants to delete (most users have persistent worktrees)
+        assert!(
+            !err_msg.contains("remove"),
+            "Error should not assume user wants to delete the worktree: {}",
+            err_msg
+        );
+
+        // Verify it's informative without making assumptions about intent
+        assert!(
+            !err_msg.contains("git worktree list"),
+            "Error should not make user run another command for info we already have: {}",
+            err_msg
+        );
 
         Ok(())
     }

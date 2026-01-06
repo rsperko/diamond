@@ -2634,7 +2634,7 @@ fn test_create_branch_preserves_staged_changes() -> Result<()> {
 #[test]
 fn test_force_checkout_overwrites_uncommitted_changes() -> Result<()> {
     // GitGateway::checkout_branch uses force mode, so it should overwrite
-    // uncommitted changes (unlike checkout_branch_safe which refuses)
+    // uncommitted changes (unlike checkout_branch_worktree_safe which refuses)
     let dir = tempdir()?;
     let _repo = init_repo(dir.path())?;
     let _ctx = TestRepoContext::new(dir.path());
