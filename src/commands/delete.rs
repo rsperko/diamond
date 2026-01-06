@@ -162,7 +162,7 @@ pub fn run(name: Option<String>, reparent: bool, force: bool, upstack: bool, dow
     // If deleting current branch, checkout parent first
     if current == name {
         if let Some(parent) = &grandparent {
-            gateway.checkout_branch_safe(parent)?;
+            gateway.checkout_branch_worktree_safe(parent)?;
             println!("Checked out parent branch: {}", parent);
         } else {
             anyhow::bail!("Cannot delete current branch '{}' without a parent to checkout", name);
@@ -284,7 +284,7 @@ pub fn run(name: Option<String>, reparent: bool, force: bool, upstack: bool, dow
 
             // Return to original branch if we were not on the deleted branch
             if let Some(ref branch) = return_to_branch {
-                gateway.checkout_branch(branch)?;
+                gateway.checkout_branch_worktree_safe(branch)?;
             }
 
             // PHASE 4: Delete from git (metadata already updated)
@@ -315,7 +315,7 @@ fn delete_upstack(gateway: &GitGateway, ref_store: &RefStore, name: &str, curren
     // If current branch is in the delete list, checkout trunk first
     if branches_to_delete.contains(&current.to_string()) {
         if let Some(ref t) = trunk {
-            gateway.checkout_branch(t)?;
+            gateway.checkout_branch_worktree_safe(t)?;
             println!("Checked out trunk branch: {}", t);
         } else {
             anyhow::bail!("Cannot delete current branch without trunk to checkout");
@@ -397,7 +397,7 @@ fn delete_downstack(gateway: &GitGateway, ref_store: &RefStore, name: &str, curr
 
     // If current branch is in the delete list, checkout trunk first
     if branches_to_delete.contains(&current.to_string()) {
-        gateway.checkout_branch(&trunk)?;
+        gateway.checkout_branch_worktree_safe(&trunk)?;
         println!("Checked out trunk branch: {}", trunk);
     }
 
@@ -475,7 +475,7 @@ mod tests {
 
         // Create feature branch
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs
         ref_store.set_trunk("main")?;
@@ -547,7 +547,7 @@ mod tests {
         // Create branch hierarchy: main -> middle -> leaf
         gateway.create_branch("middle")?;
         gateway.create_branch("leaf")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs
         ref_store.set_trunk("main")?;
@@ -600,7 +600,7 @@ mod tests {
         // Create branch hierarchy: main -> middle -> leaf
         gateway.create_branch("middle")?;
         gateway.create_branch("leaf")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs
         ref_store.set_trunk("main")?;
@@ -630,9 +630,9 @@ mod tests {
         // Create branch hierarchy: main -> middle -> child1, child2
         gateway.create_branch("middle")?;
         gateway.create_branch("child1")?;
-        gateway.checkout_branch("middle")?;
+        gateway.checkout_branch_worktree_safe("middle")?;
         gateway.create_branch("child2")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs
         ref_store.set_trunk("main")?;
@@ -667,7 +667,7 @@ mod tests {
         gateway.create_branch("parent1")?;
         gateway.create_branch("parent2")?;
         gateway.create_branch("leaf")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs
         ref_store.set_trunk("main")?;
@@ -699,7 +699,7 @@ mod tests {
         let ref_store = RefStore::new()?;
         let gateway = GitGateway::new()?;
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         ref_store.set_trunk("main")?;
         ref_store.set_parent("feature", "main")?;

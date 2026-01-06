@@ -260,6 +260,9 @@ pub struct OperationState {
     /// All branches that were part of this operation (for backup restoration on abort)
     #[serde(default)]
     pub all_branches: Vec<String>,
+    /// Branches that have been successfully completed (for progress tracking)
+    #[serde(default)]
+    pub completed_branches: Vec<String>,
     /// The branch we started on (to return to after operation)
     pub original_branch: String,
     /// For move: the target parent branch
@@ -359,6 +362,7 @@ impl OperationState {
             current_branch: None,
             remaining_branches: branches.clone(),
             all_branches: branches,
+            completed_branches: Vec::new(),
             original_branch,
             move_target_parent: None,
             old_parent: None,
@@ -373,6 +377,7 @@ impl OperationState {
             current_branch: None,
             remaining_branches: branches.clone(),
             all_branches: branches,
+            completed_branches: Vec::new(),
             original_branch,
             move_target_parent: None,
             old_parent: None,
@@ -393,6 +398,7 @@ impl OperationState {
             current_branch: None,
             remaining_branches: branches.clone(),
             all_branches: branches,
+            completed_branches: Vec::new(),
             original_branch,
             move_target_parent: Some(target_parent),
             old_parent,
@@ -412,6 +418,7 @@ impl OperationState {
             current_branch: Some(child_branch.clone()),
             remaining_branches: vec![child_branch],
             all_branches: vec![],
+            completed_branches: Vec::new(),
             original_branch: new_branch,
             move_target_parent: None,
             old_parent: Some(original_parent),

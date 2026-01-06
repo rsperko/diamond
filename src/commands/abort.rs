@@ -50,7 +50,7 @@ pub fn run() -> Result<()> {
     }
 
     // Return to original branch
-    gateway.checkout_branch(&state.original_branch)?;
+    gateway.checkout_branch_worktree_safe(&state.original_branch)?;
 
     // Clear operation state
     OperationState::clear()?;
@@ -235,7 +235,7 @@ mod tests {
 
         // Create new-branch (the one being inserted)
         gateway.create_branch("new-branch").unwrap();
-        gateway.checkout_branch("new-branch").unwrap();
+        gateway.checkout_branch_worktree_safe("new-branch").unwrap();
 
         // Simulate insert: child now points to new-branch (already modified by create --insert)
         ref_store.set_parent("child", "new-branch").unwrap();
@@ -294,7 +294,7 @@ mod tests {
         assert_ne!(modified_commit, original_commit);
 
         // Go back to main
-        gateway.checkout_branch("main").unwrap();
+        gateway.checkout_branch_worktree_safe("main").unwrap();
 
         // Create restack operation state with all_branches
         let state = OperationState::new_restack("main".to_string(), vec!["feature-1".to_string()]);

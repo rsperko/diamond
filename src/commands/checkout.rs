@@ -333,7 +333,7 @@ mod tests {
         let head = repo.head()?;
         let commit = head.peel_to_commit()?;
         repo.branch("feature", &commit, false)?;
-        gateway.checkout_branch("feature")?;
+        gateway.checkout_branch_worktree_safe("feature")?;
 
         // Use --trunk flag to go back to trunk
         run(None, true, false, false, false)?;

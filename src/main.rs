@@ -306,6 +306,9 @@ Examples:
         /// Skip automatic restack after sync
         #[arg(long)]
         no_restack: bool,
+        /// Show detailed output for all branches (including up-to-date)
+        #[arg(short = 'v', long)]
+        verbose: bool,
     },
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -835,7 +838,8 @@ async fn main() {
                 force,
                 no_cleanup,
                 no_restack,
-            } => commands::sync::run(*continue_sync, *abort, *force, *no_cleanup, !*no_restack).await,
+                verbose,
+            } => commands::sync::run(*continue_sync, *abort, *force, *no_cleanup, !*no_restack, *verbose).await,
             Commands::Get { pr, force, unfrozen } => commands::get::run(pr.clone(), *force, *unfrozen),
             Commands::Pr { branch } => commands::pr::run(branch.clone()),
             Commands::Pop => commands::pop::run(),

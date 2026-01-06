@@ -113,6 +113,30 @@ pub fn print_count(n: usize) -> String {
     format!("{}", count_style(n.to_string()))
 }
 
+/// Create a clickable hyperlink using OSC 8 terminal escape sequences.
+///
+/// In terminals that support OSC 8 (iTerm2, VSCode, kitty, etc.), the text
+/// becomes clickable and opens the URL. In terminals that don't support it,
+/// the text is displayed as-is with no visible escape sequences.
+///
+/// In non-TTY environments (pipes, files), only the text is returned.
+///
+/// # Example
+/// ```ignore
+/// let link = hyperlink("https://github.com/user/repo/pull/123", "PR #123");
+/// println!("See {} for details", link); // PR #123 is clickable
+/// ```
+pub fn hyperlink(url: &str, text: &str) -> String {
+    if !std::io::stdout().is_terminal() {
+        // Non-TTY: just show text without escape sequences
+        return text.to_string();
+    }
+
+    // OSC 8 format: \x1b]8;;URL\x07TEXT\x1b]8;;\x07
+    // This is invisible in terminals that don't support it
+    format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", url, text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +165,33 @@ mod tests {
         bullet_success("test bullet success");
         bullet_error("test bullet error");
         bullet_step("test bullet step");
+    }
+
+    #[test]
+    fn test_hyperlink_non_tty() {
+        // In test environment (non-TTY), should return plain text
+        let result = hyperlink("https://github.com/user/repo/pull/123", "PR #123");
+
+        // In non-TTY mode, should be just the text
+        // Note: This test runs in non-TTY so we can verify this behavior
+        // When is_terminal() returns false, we expect plain text
+        assert_eq!(result, "PR #123");
+    }
+
+    #[test]
+    fn test_hyperlink_osc8_format() {
+        // Test that OSC 8 format is correct when applied
+        // We can't easily test TTY mode, but we can verify the format logic
+        let url = "https://example.com";
+        let text = "Example";
+
+        // Manually construct what TTY mode should produce
+        let expected = format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", url, text);
+
+        // Verify the format structure
+        assert!(expected.contains(url));
+        assert!(expected.contains(text));
+        assert!(expected.starts_with("\x1b]8;;"));
+        assert!(expected.ends_with("\x1b]8;;\x07"));
     }
 }

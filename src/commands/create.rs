@@ -223,7 +223,7 @@ pub fn run(
         }
 
         // Return to the new branch after rebasing
-        gateway.checkout_branch(&branch_name)?;
+        gateway.checkout_branch_worktree_safe(&branch_name)?;
 
         // Clear operation state on success
         OperationState::clear()?;
@@ -621,7 +621,7 @@ mod tests {
         gateway.commit("Feature 1 commit")?;
 
         // Go back to main and create a new branch that inserts between main and feature-1
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Insert between main and feature-1
         run(
@@ -685,7 +685,7 @@ mod tests {
 
         // Create two branches from main
         run(Some("feature-1".to_string()), false, false, None, None)?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         run(Some("feature-2".to_string()), false, false, None, None)?;
 
         // Try to insert between feature-2 (current) and feature-1 (not a child of feature-2)
@@ -789,7 +789,7 @@ mod tests {
         gateway.commit("Feature 1 commit")?;
 
         // Go back to main
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Insert with boolean --insert (auto-detect child)
         // This should insert between main and feature-1
@@ -865,11 +865,11 @@ mod tests {
 
         // Now we're on B, which has parent A
         // Delete A using git directly (bypassing Diamond)
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         repo.find_branch("A", git2::BranchType::Local)?.delete()?;
 
         // Checkout B again
-        gateway.checkout_branch("B")?;
+        gateway.checkout_branch_worktree_safe("B")?;
 
         // Try to create C from B (which has deleted parent A)
         // This should fail because B's parent (A) doesn't exist

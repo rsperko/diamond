@@ -92,88 +92,107 @@ fn test_something() -> Result<()> {
 
 ### 5. 💎 UX Principles for Enterprise-Grade CLI
 
-**Diamond is a professional tool for engineering teams. UX is not an afterthought.**
-
-For comprehensive guidelines, see `agent_notes/ux_principles/`. These are the critical rules:
-
-#### Error Messages
-
-**Format** (inform, don't prescribe):
-```
-[WHAT] is [PROBLEM]:
-  [SPECIFIC DETAILS]
-```
-
-**Do**:
-- ✅ Show information you already have (don't make users run extra commands)
-- ✅ Use real values, not `<placeholders>`
-- ✅ Hide implementation details (no exit codes, internal commands, stack traces)
-- ✅ Professional tone (no emoji spam, no "Pwease" language)
-
-**Don't**:
-- ❌ Assume user intent (especially destructive actions like deletion)
-- ❌ Suggest commands when multiple valid approaches exist
-- ❌ Make users run another command for info you already queried
-- ❌ Give users numbered lists of 5 options (minimize cognitive load)
-
-**Example** (worktree conflict):
-```rust
-// ❌ Bad - assumes destructive intent
-bail!("Branch '{}' is already checked out at:\n  {}\n\nTo remove that worktree:\n  git worktree remove {}",
-    name, path, path);
-
-// ✅ Good - informative without prescribing
-bail!("Branch '{}' is already checked out at:\n  {}", name, path);
-```
-
-**Why**: Most worktree users have persistent worktrees they reuse. Suggesting deletion assumes the wrong (and rare) intent.
-
-#### Interactive Features - CRITICAL TTY Detection
-
-**ALL interactive code MUST detect TTY before prompting or launching TUI**:
+#### Error Messages: Inform, Don't Prescribe
 
 ```rust
-// Before launching TUI (dm log, dm checkout with no args)
-if !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-    anyhow::bail!("This command requires a terminal. Use --format=short for scripts.");
+// ❌ Bad - assumes destructive intent, prescribes solution
+bail!("Worktree exists at {}. Remove it: git worktree remove {}", path, path);
+
+// ✅ Good - informs, lets user decide
+bail!("Branch '{}' is already checked out at: {}", name, path);
+```
+
+**Rules**:
+- Show data you already have (don't make users run extra commands)
+- Use real values, not `<placeholders>`
+- Don't assume intent, especially for destructive actions
+- Don't suggest commands when multiple valid approaches exist
+- Professional tone (no emoji spam)
+
+#### TTY Detection: Mandatory for Interactive Features
+
+```rust
+// Before TUI
+if !std::io::stdout().is_terminal() {
+    bail!("This command requires a terminal. Use --format=short for scripts.");
 }
 
-// Before prompting for confirmation
-if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-    anyhow::bail!("This command requires confirmation. Use --force to skip.");
+// Before prompts
+if !std::io::stdin().is_terminal() {
+    bail!("This command requires confirmation. Use --force to skip.");
 }
 ```
 
-**Why**: Tests, CI, and scripts run in non-TTY environments. Without this check, they hang forever waiting for input that never comes.
+**Without this check, tests and CI hang forever.**
 
-#### Output and Consistency
+#### Batch Operations: Reduce Cognitive Load
 
-**Silent success, loud failure**:
-- Operations that succeed normally show minimal output
-- Only show progress for operations >2 seconds
-- Reserve color for errors (red), warnings (yellow), success confirmations (green)
+```rust
+// ❌ Bad - N prompts for N items (cognitive overload)
+for branch in merged_branches {
+    if ui::confirm(&format!("Delete {}?", branch))? { ... }
+}
 
-**Consistent vocabulary**:
+// ✅ Good - Single batch selection
+let to_delete = ui::select_multi("Select branches to delete", &merged_branches)?;
+```
+
+**Pattern**: One TUI selector with "all/none/select" beats N individual prompts.
+
+#### Progressive Disclosure: Signal Over Noise
+
+```rust
+// Default: Show summary
+println!("✓ 15 branches already in sync");
+
+// --verbose: Show all details
+if verbose {
+    for branch in branches {
+        println!("[{}/{}] {} already up to date", i, total, branch);
+    }
+}
+```
+
+**Rule**: Default output = signal only. Use `--verbose` for complete logs.
+
+#### Terminal Features: Degrade Gracefully
+
+```rust
+// OSC 8 hyperlinks - invisible in unsupported terminals
+pub fn hyperlink(url: &str, text: &str) -> String {
+    if !std::io::stdout().is_terminal() {
+        return text.to_string();  // Plain text in pipes/files
+    }
+    format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", url, text)  // Clickable in iTerm2/VSCode
+}
+```
+
+**Rule**: Escape sequences must never break output in unsupported environments.
+
+#### Feature Validation: Question Before Building
+
+**Before adding a flag or feature**:
+1. Research if it's a common CLI pattern (check: git, cargo, gh, npm)
+2. Verify existing functionality doesn't already solve it
+3. Err toward simplicity
+
+**Example**: Removed `--decorators` flag because it's not standard practice in professional CLIs.
+
+#### Vocabulary & Standards
+
 - **Branch** (not "ref" or "head")
-- **Stack** (the tree of branches)
-- **Trunk** (main/master branch)
-- **--force** for skipping confirmations (not `--yes`, `--skip-prompt`, `--no-interactive`)
+- **Stack** (tree of branches)
+- **Trunk** (main/master)
+- **--force** for skip confirmation (NEVER `--yes`, `--skip-prompt`, `--no-interactive`)
 
-#### UX Validation Checklist
+#### Validation Checklist
 
-Before shipping a feature:
-
-- [ ] Error messages pass "3am test" (can user fix without Googling?)
-- [ ] No `<placeholders>` in suggested commands
-- [ ] TTY detection for all interactive features
-- [ ] Consistent flag usage (`--force`, not `--yes`)
-- [ ] Silent success (don't say "Successfully completed!" for normal operations)
-- [ ] No assumptions about destructive intent
-
-**For detailed guidance**: See `agent_notes/ux_principles/`
-- `error_messages.md` - Comprehensive error message principles
-- `cli_design.md` - CLI design patterns and anti-patterns
-- `lessons_learned.md` - Real mistakes and how we fixed them
+- [ ] Error passes "3am test" (fixable without Googling)
+- [ ] No `<placeholders>` in commands
+- [ ] TTY detection for interactive code
+- [ ] Consistent flags (`--force`, `--verbose`)
+- [ ] Silent success (no unnecessary celebration)
+- [ ] No assumed destructive intent
 
 ## Project Structure & Module Organization
 
@@ -187,7 +206,6 @@ Before shipping a feature:
 - `src/validation.rs`: Integrity checks for stack data and git state.
 - `src/forge/`: Hosting provider integrations (e.g., GitHub).
 - `agent_notes/`: Design/architecture notes (not part of the shipped binary).
-  - `agent_notes/ux_principles/`: Comprehensive UX guidelines for error messages, CLI design, and lessons learned.
 
 ## Build, Test, and Development Commands
 

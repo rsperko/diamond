@@ -308,13 +308,18 @@ pub fn continue_move_from_state(state: &mut OperationState, _ref_store: &RefStor
         };
 
         if rebase_result.has_conflicts() {
-            // State already saved above, just inform user
+            // State already saved above, show rich conflict message
             println!();
-            println!("{} Conflicts detected while rebasing '{}'", "!".yellow().bold(), branch);
-            println!();
-            println!("Resolve the conflicts, then run:");
-            println!("  {} to continue moving", format!("{} continue", program_name()).cyan());
-            println!("  {} to abort the move", format!("{} abort", program_name()).cyan());
+
+            ui::display_conflict_message(
+                &branch,
+                &onto,
+                &state.remaining_branches,
+                &ref_store,
+                &gateway,
+                false, // initial conflict
+            )?;
+
             return Ok(());
         }
 
@@ -327,7 +332,7 @@ pub fn continue_move_from_state(state: &mut OperationState, _ref_store: &RefStor
     OperationState::clear()?;
 
     // Return to original branch
-    gateway.checkout_branch(&state.original_branch)?;
+    gateway.checkout_branch_worktree_safe(&state.original_branch)?;
 
     println!();
     println!("{} Move complete!", "✓".green().bold());

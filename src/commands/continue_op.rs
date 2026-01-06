@@ -1,5 +1,4 @@
 use anyhow::{bail, Result};
-use colored::Colorize;
 
 use crate::git_gateway::GitGateway;
 use crate::program_name::program_name;
@@ -55,23 +54,44 @@ pub fn run() -> Result<()> {
     // Verify git state matches expected state
     verify_git_state_matches(&state, &gateway)?;
 
-    // If there's a rebase in progress, continue it first
-    if gateway.rebase_in_progress()? && gateway.rebase_continue()?.has_conflicts() {
-        println!(
-            "{} Conflicts remain. Resolve them and run '{} continue'",
-            "!".yellow().bold(),
-            program_name()
-        );
-        return Ok(());
-    }
-
     // Dispatch to appropriate handler based on operation type
     let ref_store = RefStore::new()?;
+
+    // If there's a rebase in progress, continue it first
+    if gateway.rebase_in_progress()? {
+        let result = gateway.rebase_continue()?;
+        if result.has_conflicts() {
+            // Get parent branch for conflict context
+            let current = state
+                .current_branch
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Operation state missing current branch"))?;
+
+            let parent = ref_store.get_parent(current)?.unwrap_or_else(|| "trunk".to_string());
+
+            // Show rich conflict message
+            crate::ui::display_conflict_message(
+                current,
+                &parent,
+                &state.remaining_branches,
+                &ref_store,
+                &gateway,
+                true, // continue attempt
+            )?;
+
+            return Ok(());
+        } else {
+            // Conflicts resolved! Show success message
+            if let Some(current) = &state.current_branch {
+                crate::ui::success(&format!("Resolved conflicts in {}", current));
+            }
+        }
+    }
     match state.operation_type {
         OperationType::Sync => {
             // Skip cleanup on continue (was already handled/skipped in initial sync)
             // Map SyncOutcome to Result<()> - we don't need the outcome details here
-            crate::commands::sync::continue_sync_from_state(&mut state, &ref_store, true).map(|_| ())
+            crate::commands::sync::continue_sync_from_state(&mut state, &ref_store, true, false).map(|_| ())
         }
         OperationType::Restack => crate::commands::restack::continue_restack_from_state(&mut state, &ref_store),
         OperationType::Move => crate::commands::move_cmd::continue_move_from_state(&mut state, &ref_store),
@@ -85,7 +105,7 @@ fn continue_insert_from_state(state: &OperationState, gateway: &GitGateway) -> R
     // Just need to return to the new branch and clear state
 
     // Return to the new branch (the one that was inserted)
-    gateway.checkout_branch(&state.original_branch)?;
+    gateway.checkout_branch_worktree_safe(&state.original_branch)?;
 
     // Clear operation state
     OperationState::clear()?;
@@ -130,7 +150,7 @@ mod tests {
 
         // Create branches
         gateway.create_branch("feature").unwrap();
-        gateway.checkout_branch("main").unwrap();
+        gateway.checkout_branch_worktree_safe("main").unwrap();
 
         // Create operation state saying we should be on "feature"
         let mut state = OperationState::new_restack("main".to_string(), vec!["feature".to_string()]);
@@ -162,7 +182,7 @@ mod tests {
 
         // Create a branch
         gateway.create_branch("feature").unwrap();
-        gateway.checkout_branch("main").unwrap();
+        gateway.checkout_branch_worktree_safe("main").unwrap();
 
         // Create operation state with "feature" in remaining branches
         let state = OperationState::new_restack(
@@ -197,7 +217,7 @@ mod tests {
         // Create branches
         gateway.create_branch("feature-1").unwrap();
         gateway.create_branch("feature-2").unwrap();
-        gateway.checkout_branch("main").unwrap();
+        gateway.checkout_branch_worktree_safe("main").unwrap();
 
         // State with current_branch = None (not in middle of rebase)
         let state = OperationState::new_restack(
@@ -242,7 +262,7 @@ mod tests {
         gateway.create_branch("child").unwrap();
 
         // Simulate being on child after a successful rebase
-        gateway.checkout_branch("child").unwrap();
+        gateway.checkout_branch_worktree_safe("child").unwrap();
 
         // Create insert operation state
         let state = OperationState::new_insert("new-branch".to_string(), "child".to_string(), "main".to_string());
