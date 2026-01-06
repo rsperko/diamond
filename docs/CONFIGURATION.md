@@ -2,19 +2,6 @@
 
 Diamond uses a layered configuration system with TOML format.
 
-## Quick Start
-
-```bash
-# Set your branch prefix (user-wide)
-dm config set branch.prefix "yourname/"
-
-# Set custom remote for this repo (team-wide)
-dm config set repo.remote upstream
-
-# View current configuration
-dm config show
-```
-
 ---
 
 ## Repository Setup (GitHub/GitLab)
@@ -59,6 +46,23 @@ Stacked PRs work best with a **clean, linear history**. Without squash merging, 
 2. Set **Merge method** to "Fast-forward merge" or "Squash commits"
 3. Enable "Delete source branch" option (recommended)
 
+### GitLab Force Push Requirements
+
+**Why force push is needed:** When you run `dm sync` or `dm restack`, Diamond rebases your branches onto the updated trunk. This changes commit hashes, requiring a force push to update the remote. Diamond uses `--force-with-lease` by default, which safely fails if the remote has commits you haven't fetched.
+
+**Default behavior:** GitLab protects only the default branch (main/master) by default. Feature branches are unprotected, so Diamond works out of the box for most repositories.
+
+**If force push is blocked:**
+
+Your organization may have additional protection rules. To fix this:
+
+1. Enable "Allow force push" in your repository's branch protection settings, or
+2. Only protect main/master, leaving feature branches unprotected
+
+See [GitLab's protected branches documentation](https://docs.gitlab.com/user/project/repository/branches/protected/) for current steps.
+
+**For self-hosted GitLab:** Check with your administrator—default settings may differ from GitLab.com.
+
 ### What Happens When You Squash
 
 When you merge a PR with squash:
@@ -89,6 +93,244 @@ If you don't want to change repo settings, you can squash manually:
 4. Confirm
 
 **Note:** This requires remembering to squash every time. Changing the default is more reliable.
+
+---
+
+## Shell Completion
+
+Diamond provides comprehensive shell completion support for bash, zsh, fish, and other popular shells.
+
+### Features
+
+- ✅ **Static completions**: All 40+ subcommands with their options and flags
+- ✅ **Dynamic completions**: Branch names from your repository's tracked branches
+- ✅ **Multi-shell support**: bash, zsh, fish, elvish, powershell
+- ✅ **Instant updates**: Completions reflect current repository state
+
+### Installation
+
+#### Bash
+
+**Prerequisites:** bash 4.0 or later
+
+```bash
+# Create completion directory if it doesn't exist
+mkdir -p ~/.local/share/bash-completion/completions
+
+# Generate and install completion script
+dm completion bash > ~/.local/share/bash-completion/completions/dm
+
+# Reload your shell configuration
+source ~/.bashrc
+```
+
+**Alternative locations:**
+```bash
+# System-wide (requires sudo)
+sudo dm completion bash > /usr/share/bash-completion/completions/dm
+
+# macOS Homebrew bash-completion
+dm completion bash > $(brew --prefix)/etc/bash_completion.d/dm
+```
+
+#### Zsh
+
+**Prerequisites:** zsh 5.0 or later
+
+```bash
+# Create completion directory
+mkdir -p ~/.zsh/completions
+
+# Generate completion script
+dm completion zsh > ~/.zsh/completions/_dm
+
+# Add to fpath (add this line to ~/.zshrc if not already present)
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+
+# Initialize completion system (add to ~/.zshrc if not present)
+echo 'autoload -Uz compinit && compinit' >> ~/.zshrc
+
+# Reload your shell
+source ~/.zshrc
+```
+
+**Notes for zsh:**
+- Completion files must start with `_` (underscore)
+- If completions don't work, try running `rm ~/.zcompdump && compinit`
+- Some zsh frameworks (oh-my-zsh, prezto) may require additional configuration
+
+#### Fish
+
+**Prerequisites:** fish 3.0 or later
+
+```bash
+# Generate and install completion script
+dm completion fish > ~/.config/fish/completions/dm.fish
+
+# Completions are loaded automatically in fish
+# No need to reload or modify config files
+```
+
+Fish completions are typically active immediately. If not, restart your fish shell.
+
+### Usage
+
+**Completing subcommands:**
+```bash
+dm <TAB>
+# Shows: create, checkout, log, track, submit, sync, ...
+```
+
+**Completing options:**
+```bash
+dm create --<TAB>
+# Shows: --all --message --help
+
+dm submit -<TAB>
+# Shows: --stack --force --help
+```
+
+**Dynamic branch name completion:**
+```bash
+dm checkout <TAB>
+# Shows only tracked branches from refs/diamond/parent/*
+# Example: feat/auth  feat/ui  fix/bug-123
+```
+
+**Other commands with branch completion:**
+- `dm delete <TAB>` - tracked branches
+- `dm info <TAB>` - tracked branches
+- `dm move --onto <TAB>` - tracked branches
+
+### Troubleshooting
+
+#### Completions Not Working
+
+1. **Verify completion script is installed:**
+   ```bash
+   # Bash
+   ls -la ~/.local/share/bash-completion/completions/dm
+
+   # Zsh
+   ls -la ~/.zsh/completions/_dm
+
+   # Fish
+   ls -la ~/.config/fish/completions/dm.fish
+   ```
+
+2. **Check shell version:**
+   ```bash
+   bash --version    # Need 4.0+
+   zsh --version     # Need 5.0+
+   fish --version    # Need 3.0+
+   ```
+
+3. **Regenerate completion script:**
+   ```bash
+   dm completion <shell> > /path/to/completion/file
+   ```
+
+#### Bash-Specific Issues
+
+**Problem:** Completions don't load
+
+**Solutions:**
+```bash
+# Check if bash-completion is installed
+ls /usr/share/bash-completion/bash_completion
+
+# macOS: install bash-completion via Homebrew
+brew install bash-completion
+
+# Add to ~/.bashrc if not present:
+if [ -f /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+fi
+
+# Reload
+source ~/.bashrc
+```
+
+#### Zsh-Specific Issues
+
+**Problem:** Completions not showing up
+
+**Solutions:**
+```bash
+# Clear completion cache
+rm ~/.zcompdump
+compinit
+
+# Verify fpath includes completion directory
+echo $fpath | grep zsh/completions
+
+# If not, add to ~/.zshrc:
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+
+# Reload
+source ~/.zshrc
+```
+
+**Problem:** Completions are outdated
+
+**Solution:**
+```bash
+# Force rebuild completion cache
+rm ~/.zcompdump && exec zsh
+```
+
+#### Fish-Specific Issues
+
+**Problem:** Completions not appearing
+
+**Solutions:**
+```bash
+# Check if completion file exists
+ls ~/.config/fish/completions/dm.fish
+
+# Reload fish configuration
+source ~/.config/fish/config.fish
+
+# Or restart fish
+exec fish
+```
+
+#### Dynamic Completions Not Working
+
+**Problem:** Branch names don't appear in completions
+
+**Diagnosis:**
+```bash
+# Check if you're in a Diamond-initialized repository
+git show-ref refs/diamond/config/trunk
+
+# Verify branches are tracked
+git for-each-ref --format='%(refname:short)' refs/diamond/parent/
+```
+
+**Common causes:**
+1. Not in a git repository
+2. Diamond not initialized (`dm init` not run)
+3. No branches tracked yet
+4. Corrupted refs
+
+### Updating Completions
+
+When Diamond is updated with new commands or options, regenerate completion scripts:
+
+```bash
+# Bash
+dm completion bash > ~/.local/share/bash-completion/completions/dm
+source ~/.bashrc
+
+# Zsh
+dm completion zsh > ~/.zsh/completions/_dm
+rm ~/.zcompdump && compinit
+
+# Fish
+dm completion fish > ~/.config/fish/completions/dm.fish
+```
 
 ---
 
