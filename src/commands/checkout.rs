@@ -421,4 +421,53 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_checkout_preserves_untracked_files() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo(dir.path())?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+
+        // Create and commit a file on main
+        let tracked_file = dir.path().join("a.txt");
+        std::fs::write(&tracked_file, "tracked content")?;
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("a.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent = repo.head()?.peel_to_commit()?;
+        let sig = git2::Signature::now("Test", "test@test.com")?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Add a.txt", &tree, &[&parent])?;
+
+        // Create feature branch
+        gateway.create_branch("feature")?;
+
+        // Create an untracked file on feature
+        let untracked_file = dir.path().join("b.txt");
+        std::fs::write(&untracked_file, "untracked content")?;
+
+        // Verify untracked file exists
+        assert!(untracked_file.exists(), "Untracked file should exist before checkout");
+
+        // Checkout main - this should NOT delete the untracked file
+        run(Some("main".to_string()), false, false, false, false)?;
+
+        // Verify we're on main
+        assert_eq!(gateway.get_current_branch_name()?, "main");
+
+        // CRITICAL: Verify untracked file still exists
+        assert!(
+            untracked_file.exists(),
+            "Untracked file 'b.txt' was deleted during checkout! This is a CATASTROPHIC bug."
+        );
+
+        // Verify content is preserved
+        let content = std::fs::read_to_string(&untracked_file)?;
+        assert_eq!(content, "untracked content", "Untracked file content was modified");
+
+        Ok(())
+    }
 }
