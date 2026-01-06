@@ -1033,7 +1033,7 @@ dm completion fish > ~/.config/fish/completions/dm.fish
 |----------|-------------|
 | `<SHELL>` | Shell to generate completions for: `bash`, `zsh`, `fish`, `elvish`, `powershell` |
 
-See [COMPLETIONS.md](COMPLETIONS.md) for detailed installation instructions.
+See [CONFIGURATION.md](CONFIGURATION.md#shell-completion) for detailed installation instructions.
 
 ---
 
