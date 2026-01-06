@@ -35,9 +35,23 @@ Stacked pull requests let you build Feature B *on top of* Feature A—before Fea
 
 ## Installation
 
+### macOS (Homebrew)
+
+```bash
+brew tap rsperko/tap
+brew install diamond
+```
+
+Or install in one command:
+```bash
+brew install rsperko/tap/diamond
+```
+
+### Cargo (all platforms)
+
 **Prerequisites:** Rust 1.82+
 
-**Install from crates.io (recommended):**
+**Install from crates.io:**
 ```bash
 cargo install diamond-cli
 ```
