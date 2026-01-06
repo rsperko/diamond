@@ -118,6 +118,9 @@ publish:
 #   - git checkout main && git pull
 #   - Run: just publish-release X.Y.Z
 #   - This creates the git tag and publishes to crates.io
+#   - GitHub Actions automatically:
+#     * Creates GitHub release with CHANGELOG notes
+#     * Updates Homebrew tap formula
 #
 # If anything goes wrong, the scripts abort and provide clear error messages.
 # ============================================================================
