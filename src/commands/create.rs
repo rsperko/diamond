@@ -34,6 +34,7 @@ pub fn run(
     update: bool,
     message: Option<String>,
     insert: Option<String>,
+    patch: bool,
 ) -> Result<()> {
     // Acquire operation lock to prevent race conditions with concurrent sync/restack.
     // This is especially important for --insert which modifies refs and rebases.
@@ -53,6 +54,9 @@ pub fn run(
     // Validate mutually exclusive flags
     if all && update {
         anyhow::bail!("Cannot use both -a (all) and -u (update) flags together");
+    }
+    if patch && (all || update) {
+        anyhow::bail!("Cannot use --patch with -a/--all or -u/--update (patch mode is interactive)");
     }
 
     // 1. Determine raw branch name (explicit or auto-generated from message)
@@ -168,18 +172,22 @@ pub fn run(
     // 8. Update Stack Metadata
     ref_store.set_parent(&branch_name, &parent)?;
 
-    // 9. Handle -a/-u and/or -m flags independently
+    // 9. Handle -a/-u/-p and/or -m flags independently
     if all {
         gateway.stage_all()?;
         println!("Staged all changes");
     } else if update {
         gateway.stage_updates()?;
         println!("Staged tracked file updates");
+    } else if patch {
+        gateway.stage_patch()?;
+        println!("Staged selected hunks");
     }
 
     if let Some(msg) = message {
         gateway.commit(&msg)?;
         println!("Committed: {}", msg);
+        gateway.show_commit_diffstat()?;
     }
 
     // 10. Update base_sha to track this branch's initial state (in cache only)
@@ -264,7 +272,7 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create a new branch
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
 
         // Verify branch exists in git
         assert!(gateway.branch_exists("feature-1")?);
@@ -286,10 +294,10 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // Create first branch
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
 
         // Create second branch from first
-        run(Some("feature-2".to_string()), false, false, None, None)?;
+        run(Some("feature-2".to_string()), false, false, None, None, false)?;
 
         // Verify parent relationship via refs
         let ref_store = RefStore::new()?;
@@ -310,10 +318,10 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // Create a branch
-        run(Some("duplicate".to_string()), false, false, None, None)?;
+        run(Some("duplicate".to_string()), false, false, None, None, false)?;
 
         // Try to create it again
-        let result = run(Some("duplicate".to_string()), false, false, None, None);
+        let result = run(Some("duplicate".to_string()), false, false, None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
 
@@ -332,7 +340,7 @@ mod tests {
         let initial_branch = gateway.get_current_branch_name()?;
 
         // Create feature from main/master
-        run(Some("feature".to_string()), false, false, None, None)?;
+        run(Some("feature".to_string()), false, false, None, None, false)?;
 
         // Verify parent is initial branch via refs
         let ref_store = RefStore::new()?;
@@ -349,9 +357,9 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // Create chain: main -> feature-1 -> feature-2 -> feature-3
-        run(Some("feature-1".to_string()), false, false, None, None)?;
-        run(Some("feature-2".to_string()), false, false, None, None)?;
-        run(Some("feature-3".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
+        run(Some("feature-2".to_string()), false, false, None, None, false)?;
+        run(Some("feature-3".to_string()), false, false, None, None, false)?;
 
         // Verify full chain via refs
         let ref_store = RefStore::new()?;
@@ -375,7 +383,14 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create branch with special characters
-        run(Some("feature/sub-branch_v2".to_string()), false, false, None, None)?;
+        run(
+            Some("feature/sub-branch_v2".to_string()),
+            false,
+            false,
+            None,
+            None,
+            false,
+        )?;
 
         // Verify it was created
         assert!(gateway.branch_exists("feature/sub-branch_v2")?);
@@ -390,7 +405,7 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // Create initial structure
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
 
         // Add metadata to feature-1 via cache
         let mut cache = Cache::load()?;
@@ -398,7 +413,7 @@ mod tests {
         cache.save()?;
 
         // Create child branch
-        run(Some("feature-2".to_string()), false, false, None, None)?;
+        run(Some("feature-2".to_string()), false, false, None, None, false)?;
 
         // Verify original metadata preserved in cache
         let cache = Cache::load()?;
@@ -422,7 +437,7 @@ mod tests {
         fs::write(dir.path().join("test.txt"), "content")?;
 
         // Create with -a but no -m (should stage but not commit)
-        run(Some("feature".to_string()), true, false, None, None)?;
+        run(Some("feature".to_string()), true, false, None, None, false)?;
 
         // Verify branch exists
         assert!(gateway.branch_exists("feature")?);
@@ -457,6 +472,7 @@ mod tests {
             false,
             Some("Test commit".to_string()),
             None,
+            false,
         )?;
 
         // Verify branch and commit
@@ -490,6 +506,7 @@ mod tests {
             false,
             Some("Test commit".to_string()),
             None,
+            false,
         )?;
 
         // Verify we're on the feature branch
@@ -514,7 +531,7 @@ mod tests {
         fs::write(dir.path().join("test.txt"), "content")?;
 
         // Create branch with message but no name (should auto-generate)
-        run(None, true, false, Some("Add new feature".to_string()), None)?;
+        run(None, true, false, Some("Add new feature".to_string()), None, false)?;
 
         // Verify branch was created with slugified name (MM-DD-message_with_underscores)
         let current_branch = gateway.get_current_branch_name()?;
@@ -542,7 +559,14 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create branch with special characters in message
-        run(None, false, false, Some("Fix bug #123: URL parsing!".to_string()), None)?;
+        run(
+            None,
+            false,
+            false,
+            Some("Fix bug #123: URL parsing!".to_string()),
+            None,
+            false,
+        )?;
 
         // Verify branch name is slugified (MM-DD-message_with_underscores)
         let current_branch = gateway.get_current_branch_name()?;
@@ -568,7 +592,7 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // Create with neither name nor message should fail
-        let result = run(None, false, false, None, None);
+        let result = run(None, false, false, None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("branch name"));
 
@@ -582,7 +606,14 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // URL injection attempt
-        let result = run(Some("branch](http://evil.com)".to_string()), false, false, None, None);
+        let result = run(
+            Some("branch](http://evil.com)".to_string()),
+            false,
+            false,
+            None,
+            None,
+            false,
+        );
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -592,12 +623,12 @@ mod tests {
         );
 
         // Code block injection
-        let result = run(Some("branch```code".to_string()), false, false, None, None);
+        let result = run(Some("branch```code".to_string()), false, false, None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("dangerous"));
 
         // HTML comment injection
-        let result = run(Some("branch<!--".to_string()), false, false, None, None);
+        let result = run(Some("branch<!--".to_string()), false, false, None, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("dangerous"));
 
@@ -613,7 +644,7 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create initial stack: main -> feature-1
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
 
         // Make a commit on feature-1 so we have something to rebase
         fs::write(dir.path().join("feature1.txt"), "feature 1 content")?;
@@ -630,6 +661,7 @@ mod tests {
             false,
             None,
             Some("feature-1".to_string()),
+            false,
         )?;
 
         // Verify the new structure via refs: main -> new-middle -> feature-1
@@ -667,6 +699,7 @@ mod tests {
             false,
             None,
             Some("nonexistent".to_string()),
+            false,
         );
 
         assert!(result.is_err());
@@ -684,9 +717,9 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create two branches from main
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
         gateway.checkout_branch_worktree_safe("main")?;
-        run(Some("feature-2".to_string()), false, false, None, None)?;
+        run(Some("feature-2".to_string()), false, false, None, None, false)?;
 
         // Try to insert between feature-2 (current) and feature-1 (not a child of feature-2)
         let result = run(
@@ -695,6 +728,7 @@ mod tests {
             false,
             None,
             Some("feature-1".to_string()),
+            false,
         );
 
         assert!(result.is_err());
@@ -734,6 +768,7 @@ mod tests {
             true,  // update
             Some("Update tracked file".to_string()),
             None,
+            false,
         )?;
 
         // Verify the commit only has tracked.txt changes
@@ -759,6 +794,7 @@ mod tests {
             true, // update
             Some("Test".to_string()),
             None,
+            false,
         );
 
         assert!(result.is_err());
@@ -781,7 +817,7 @@ mod tests {
         let gateway = GitGateway::new()?;
 
         // Create initial stack: main -> feature-1
-        run(Some("feature-1".to_string()), false, false, None, None)?;
+        run(Some("feature-1".to_string()), false, false, None, None, false)?;
 
         // Make a commit on feature-1
         fs::write(dir.path().join("feature1.txt"), "feature 1 content")?;
@@ -799,6 +835,7 @@ mod tests {
             false,
             None,
             Some("".to_string()), // Empty string indicates boolean flag usage
+            false,
         )?;
 
         // Verify the new structure: main -> new-middle -> feature-1
@@ -827,6 +864,7 @@ mod tests {
             false,
             None,
             Some("".to_string()), // Empty string indicates boolean flag usage
+            false,
         );
 
         assert!(result.is_err());
@@ -853,12 +891,12 @@ mod tests {
         ref_store.set_trunk("main")?;
 
         // Create stack: main -> A -> B
-        run(Some("A".to_string()), false, false, None, None)?;
+        run(Some("A".to_string()), false, false, None, None, false)?;
         fs::write(dir.path().join("a.txt"), "a")?;
         gateway.stage_all()?;
         gateway.commit("A commit")?;
 
-        run(Some("B".to_string()), false, false, None, None)?;
+        run(Some("B".to_string()), false, false, None, None, false)?;
         fs::write(dir.path().join("b.txt"), "b")?;
         gateway.stage_all()?;
         gateway.commit("B commit")?;
@@ -873,7 +911,7 @@ mod tests {
 
         // Try to create C from B (which has deleted parent A)
         // This should fail because B's parent (A) doesn't exist
-        let result = run(Some("C".to_string()), false, false, None, None);
+        let result = run(Some("C".to_string()), false, false, None, None, false);
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -899,7 +937,7 @@ mod tests {
         ref_store.set_trunk("main")?;
 
         // Create from trunk should always succeed (no parent to validate)
-        let result = run(Some("A".to_string()), false, false, None, None);
+        let result = run(Some("A".to_string()), false, false, None, None, false);
 
         assert!(result.is_ok());
 
@@ -919,13 +957,13 @@ mod tests {
         ref_store.set_trunk("main")?;
 
         // Create A from main
-        run(Some("A".to_string()), false, false, None, None)?;
+        run(Some("A".to_string()), false, false, None, None, false)?;
         fs::write(dir.path().join("a.txt"), "a")?;
         gateway.stage_all()?;
         gateway.commit("A commit")?;
 
         // Create B from A should succeed (A's parent is trunk, which always exists)
-        let result = run(Some("B".to_string()), false, false, None, None);
+        let result = run(Some("B".to_string()), false, false, None, None, false);
 
         assert!(result.is_ok());
 
