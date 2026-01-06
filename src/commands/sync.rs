@@ -500,6 +500,9 @@ pub fn continue_sync_from_state(
             .collect()
     };
 
+    // Create progress tracker (shows progress bar for 10+ branches, spinners for <10)
+    let mut sync_progress = ui::SyncProgress::new(total, "Syncing stack");
+
     while !state.remaining_branches.is_empty() {
         let branch = state.remaining_branches.remove(0);
         state.current_branch = Some(branch.clone());
@@ -513,8 +516,8 @@ pub fn continue_sync_from_state(
         if gateway.is_branch_based_on(&branch, &onto)? {
             outcome.already_in_sync.push(branch.clone());
 
-            // Only show "already in sync" messages in verbose mode
-            if verbose {
+            // Only show "already in sync" messages in verbose mode or non-progress-bar mode
+            if verbose || !sync_progress.is_progress_bar_mode() {
                 // Build PR display with clickable link if available
                 let pr_display = if let Some(pr_url) = cache.get_pr_url(&branch) {
                     if let Some(num_str) = pr_url.rsplit('/').next() {
@@ -530,24 +533,31 @@ pub fn continue_sync_from_state(
                     String::new()
                 };
 
-                println!(
-                    "  [{}/{}] {}{} already up to date",
-                    processed,
-                    total,
-                    ui::print_branch(&branch),
-                    pr_display
-                );
+                if sync_progress.is_progress_bar_mode() {
+                    // In progress bar mode with verbose, just print (don't interfere with bar)
+                    println!(
+                        "  [{}/{}] {}{} already up to date",
+                        processed,
+                        total,
+                        ui::print_branch(&branch),
+                        pr_display
+                    );
+                } else {
+                    // Spinner mode: show as normal
+                    println!(
+                        "  [{}/{}] {}{} already up to date",
+                        processed,
+                        total,
+                        ui::print_branch(&branch),
+                        pr_display
+                    );
+                }
             }
             continue;
         }
 
-        // Show spinner with progress for active rebase
-        let spin = ui::spinner(&format!(
-            "[{}/{}] Rebasing {}...",
-            processed,
-            total,
-            ui::print_branch(&branch)
-        ));
+        // Start rebase (creates spinner or updates progress bar message)
+        let spin = sync_progress.start_branch(&branch);
 
         // CHECKPOINT: Save state BEFORE rebase (crash recovery)
         state.save()?;
@@ -565,7 +575,7 @@ pub fn continue_sync_from_state(
             if is_in_current_stack {
                 // STOP: Branch is in your dependency chain (ancestor, current, or descendant)
                 // User needs to resolve this to continue working on their stack
-                ui::spinner_error(spin, &format!("Conflicts in {}", branch));
+                sync_progress.finish_branch_error(spin, &format!("Conflicts in {}", branch));
                 ui::blank();
 
                 // Show rich conflict message with stack context and conflicted files
@@ -584,7 +594,7 @@ pub fn continue_sync_from_state(
                 // SKIP: Branch is in a different stack, doesn't block your work
                 // Abort the rebase and continue with other branches
                 gateway.rebase_abort()?;
-                ui::spinner_warning(spin, &format!("Skipped {} (conflicts)", branch));
+                sync_progress.finish_branch_warning(spin, &format!("Skipped {} (conflicts)", branch));
 
                 let reason = format!("conflicts with {}", onto);
                 outcome.skipped_branches.push((branch.clone(), reason));
@@ -624,7 +634,7 @@ pub fn continue_sync_from_state(
             String::new()
         };
 
-        ui::spinner_success(spin, &format!("Rebased {}{}", branch, pr_display));
+        sync_progress.finish_branch_success(spin, &format!("Rebased {}{}", branch, pr_display));
         outcome.rebased.push(branch.clone());
 
         // Update base_sha after successful rebase
@@ -636,6 +646,10 @@ pub fn continue_sync_from_state(
     state.current_branch = None;
     state.in_progress = false;
     OperationState::clear()?;
+
+    // Finish progress bar (if in progress bar mode)
+    // This ensures a clean transition to summary output
+    drop(sync_progress);
 
     // Return to original branch if it still exists, otherwise stay on trunk
     let trunk = ref_store.require_trunk()?;

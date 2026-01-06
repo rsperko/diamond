@@ -918,7 +918,7 @@ async fn main() {
             },
             Commands::Doctor { fix, fix_viz } => commands::doctor::run(*fix, *fix_viz),
             Commands::Gc { max_age, keep, dry_run } => commands::gc::run(*max_age, *keep, *dry_run),
-            Commands::Cleanup { force } => commands::cleanup::run(*force),
+            Commands::Cleanup { force } => commands::cleanup::run(*force).await,
             Commands::Undo { branch, list, force } => commands::undo::run(branch.clone(), *list, *force),
             Commands::History { count, all } => commands::history::run(if *all { Some(0) } else { *count }),
             Commands::Completion { shell } => commands::completion::run(*shell),

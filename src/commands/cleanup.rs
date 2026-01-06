@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::cache::Cache;
-use crate::forge::{get_forge, AsyncForge, PrInfo, PrState};
+use crate::forge::{get_async_forge, AsyncForge, PrInfo, PrState};
 #[cfg(test)]
 use crate::forge::Forge;
 use crate::git_gateway::{GitGateway, RebaseOutcome};
@@ -10,12 +10,9 @@ use crate::ref_store::RefStore;
 use crate::ui;
 
 /// Clean up branches that have been merged to trunk
-pub fn run(force: bool) -> Result<()> {
+pub async fn run(force: bool) -> Result<()> {
     let gateway = GitGateway::new()?;
     let ref_store = RefStore::new()?;
-
-    // Try to get forge for updating PR bases (best effort)
-    let forge = get_forge(None).ok();
 
     // Verify we have a trunk
     let trunk = ref_store
@@ -25,45 +22,128 @@ pub fn run(force: bool) -> Result<()> {
     // Get current branch to avoid deleting it
     let current_branch = gateway.get_current_branch_name()?;
 
-    // Find merged branches (only checks tracked branches)
-    let merged_branches = find_merged_branches(&gateway, &ref_store, &trunk)?;
-
-    // Filter out current branch (trunk already excluded by find_merged_branches)
-    let candidates: Vec<String> = merged_branches.into_iter().filter(|b| b != &current_branch).collect();
+    // Collect all tracked branches that could be merged
+    let all_branches = ref_store.collect_branches_dfs(std::slice::from_ref(&trunk))?;
+    let candidates: Vec<String> = all_branches
+        .into_iter()
+        .filter(|b| b != &trunk && b != &current_branch)
+        .collect();
 
     if candidates.is_empty() {
-        ui::success_bold("No merged branches to clean up");
+        ui::success_bold("No tracked branches to check");
         return Ok(());
     }
 
-    // Load cache for PR URLs
-    let cache = Cache::load().unwrap_or_default();
+    // Try forge API first (handles squash merges, more accurate)
+    let mut branches_to_delete: Vec<String> = vec![];
+    let mut deleted_via_forge = false;
 
-    // Show what will be deleted
-    ui::step(&format!("Found {} merged branch(es):", candidates.len()));
-    for branch in &candidates {
-        let pr_url = cache.get_pr_url(branch);
+    match get_async_forge(None) {
+        Ok(forge) => {
+            // Check auth first
+            if forge.check_auth().is_ok() {
+                // Find branches with merged PRs
+                let merged_prs = find_merged_prs_async(forge.as_ref(), &candidates).await;
 
-        if let Some(url) = pr_url {
-            ui::bullet(&format!("{} ({})", ui::print_branch(branch), ui::print_url(url)));
-        } else {
-            ui::bullet(&ui::print_branch(branch));
+                if !merged_prs.is_empty() {
+                    deleted_via_forge = true;
+
+                    // Batch selection UX (or --force to skip)
+                    branches_to_delete = if force {
+                        // Force mode: delete all merged PRs without prompting
+                        merged_prs.iter().map(|(branch, _)| branch.clone()).collect()
+                    } else {
+                        // Interactive mode: batch selection
+                        match ui::select_branches_for_cleanup(&merged_prs) {
+                            Ok(selected) => selected,
+                            Err(_) => {
+                                // Non-TTY environment
+                                anyhow::bail!(
+                                    "Found {} merged PR(s) but cannot prompt in non-interactive mode.\n\
+                                    Use --force to automatically delete all merged branches.",
+                                    merged_prs.len()
+                                );
+                            }
+                        }
+                    };
+
+                    if branches_to_delete.is_empty() {
+                        ui::warning("No branches selected for cleanup");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // No forge configured - fall back to git-based detection
         }
     }
-    ui::blank();
 
-    // Confirm unless --force
-    if !force && !ui::confirm("These branches will be deleted locally. Continue?", false)? {
-        ui::warning("Cleanup cancelled");
-        return Ok(());
+    // Fall back to git --merged if no PRs found via forge
+    if !deleted_via_forge {
+        let git_merged = find_merged_branches(&gateway, &ref_store, &trunk)?;
+        let git_candidates: Vec<String> = git_merged.into_iter().filter(|b| b != &current_branch).collect();
+
+        if git_candidates.is_empty() {
+            ui::success_bold("No merged branches to clean up");
+            return Ok(());
+        }
+
+        // Load cache for PR URLs (display only)
+        let cache = Cache::load().unwrap_or_default();
+
+        // Show merged branches with PR info if available
+        ui::step(&format!(
+            "Found {} merged branch(es) (git-based detection):",
+            git_candidates.len()
+        ));
+        for branch in &git_candidates {
+            let pr_url = cache.get_pr_url(branch);
+            if let Some(url) = pr_url {
+                ui::bullet(&format!("{} ({})", ui::print_branch(branch), ui::print_url(url)));
+            } else {
+                ui::bullet(&ui::print_branch(branch));
+            }
+        }
+        ui::blank();
+
+        // Batch selection or --force
+        branches_to_delete = if force {
+            // Force mode: delete all
+            git_candidates
+        } else {
+            // Interactive mode: multi-select (simpler than PR-based since no PR info)
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                // Simple all-or-none for git-based (most users use PRs anyway)
+                if ui::confirm("Delete these branches locally?", false)? {
+                    git_candidates
+                } else {
+                    ui::warning("Cleanup cancelled");
+                    return Ok(());
+                }
+            } else {
+                // Non-TTY
+                anyhow::bail!(
+                    "Found {} merged branches but cannot prompt in non-interactive mode.\n\
+                    Use --force to automatically delete all merged branches.",
+                    git_candidates.len()
+                );
+            }
+        };
     }
+
+    // Load cache and get forge for PR base updates
+    let mut cache = Cache::load().unwrap_or_default();
+    let forge = get_async_forge(None).ok();
 
     // Delete branches and update metadata
     // IMPORTANT: We restack children BEFORE deleting parent to avoid orphaning
     // children if restack encounters conflicts
     let mut deleted_count = 0;
 
-    for branch in &candidates {
+    ui::step(&format!("Cleaning up {} branch(es):", branches_to_delete.len()));
+
+    for branch in &branches_to_delete {
         // Get parent and children BEFORE any modifications
         let parent = ref_store.get_parent(branch)?;
         let children: Vec<String> = ref_store.get_children(branch)?.into_iter().collect();
@@ -84,15 +164,9 @@ pub fn run(force: bool) -> Result<()> {
                         // Success - update metadata now that rebase succeeded
                         ref_store.reparent(child, restack_onto)?;
 
-                        // Update PR base on GitHub if forge is available and PR is open
-                        if let Some(ref forge) = forge {
-                            if let Ok(Some(pr_info)) = forge.pr_exists(child) {
-                                if pr_info.state == PrState::Open {
-                                    if let Err(e) = forge.update_pr_base(child, restack_onto) {
-                                        ui::warning(&format!("Could not update PR base for {}: {}", child, e));
-                                    }
-                                }
-                            }
+                        // Update base_sha for reparented child
+                        if let Ok(sha) = gateway.get_branch_sha(child) {
+                            cache.set_base_sha(child, &sha);
                         }
                     }
                     Ok(RebaseOutcome::Conflicts) => {
@@ -136,6 +210,65 @@ pub fn run(force: bool) -> Result<()> {
             }
             Err(e) => {
                 ui::bullet_error(&format!("Failed to delete {}: {}", branch, e));
+            }
+        }
+    }
+
+    // Save cache with updated base_sha values
+    if deleted_count > 0 {
+        cache.save()?;
+    }
+
+    // Batch update PR bases for all reparented children (if forge available)
+    if let Some(forge) = forge {
+        // Collect all children that were reparented
+        let mut all_reparented_children: Vec<(String, String)> = vec![];
+
+        for branch in &branches_to_delete {
+            if let Ok(Some(_parent)) = ref_store.get_parent(branch) {
+                if let Ok(children) = ref_store.get_children(branch) {
+                    let restack_onto = ref_store.get_parent(branch)?.unwrap_or(trunk.clone());
+                    for child in children {
+                        all_reparented_children.push((child, restack_onto.clone()));
+                    }
+                }
+            }
+        }
+
+        if !all_reparented_children.is_empty() {
+            // Batch check which children have open PRs
+            let child_branches: Vec<String> = all_reparented_children.iter().map(|(child, _)| child.clone()).collect();
+            let pr_results = forge.check_prs_exist(&child_branches).await;
+
+            // Filter to only open PRs that need base updates
+            let base_updates: Vec<(String, String)> = pr_results
+                .into_iter()
+                .filter_map(|(child, pr_info)| {
+                    pr_info.and_then(|info| {
+                        if info.state == PrState::Open {
+                            // Find the new base for this child
+                            all_reparented_children
+                                .iter()
+                                .find(|(c, _)| c == &child)
+                                .map(|(_, new_base)| (child, new_base.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .collect();
+
+            // Batch update PR bases
+            if !base_updates.is_empty() {
+                let updated = forge.update_pr_bases(&base_updates).await;
+                let failed = base_updates.len() - updated;
+                if failed > 0 {
+                    ui::warning(&format!(
+                        "Could not update PR base for {} of {} reparented children",
+                        failed,
+                        base_updates.len()
+                    ));
+                }
             }
         }
     }
@@ -561,8 +694,8 @@ mod tests {
 
     // === Original tests ===
 
-    #[test]
-    fn test_cleanup_no_merged_branches() {
+    #[tokio::test]
+    async fn test_cleanup_no_merged_branches() {
         let dir = tempdir().unwrap();
         let _repo = init_test_repo(dir.path()).unwrap();
         let _ctx = TestRepoContext::new(dir.path());
@@ -571,18 +704,18 @@ mod tests {
         ref_store.set_trunk("main").unwrap();
 
         // Should succeed with no branches to clean
-        let result = run(true);
+        let result = run(true).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_cleanup_no_trunk_fails() {
+    #[tokio::test]
+    async fn test_cleanup_no_trunk_fails() {
         let dir = tempdir().unwrap();
         let _repo = init_test_repo(dir.path()).unwrap();
         let _ctx = TestRepoContext::new(dir.path());
 
         // No trunk set
-        let result = run(true);
+        let result = run(true).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No trunk"));
     }
