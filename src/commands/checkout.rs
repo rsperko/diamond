@@ -2,6 +2,7 @@ use crate::branch_tree::{build_branch_tree, find_current_branch_index, format_in
 use crate::git_gateway::GitGateway;
 use crate::program_name::program_name;
 use crate::ref_store::RefStore;
+use crate::ui::{highlight_matches, render_search_box, SearchState, NO_MATCHES_MESSAGE};
 use anyhow::Result;
 use ratatui::{
     backend::CrosstermBackend,
@@ -126,101 +127,222 @@ fn run_app(
     let current_idx = find_current_branch_index(&rows);
     state.select(Some(current_idx));
 
+    // Initialize fuzzy search state
+    let mut search_state = SearchState::new(rows.len());
+
     loop {
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
+                .constraints(
+                    [
+                        Constraint::Length(3), // Search box
+                        Constraint::Min(0),    // Branch list
+                        Constraint::Length(3), // Help text
+                    ]
+                    .as_ref(),
+                )
                 .split(f.area());
 
-            let items: Vec<ListItem> = rows
+            // Render search input box
+            let search_widget = render_search_box(search_state.query());
+            f.render_widget(search_widget, chunks[0]);
+
+            // Build items from FILTERED indices with match highlighting
+            // Clone filtered indices to avoid borrow conflicts with mutable get_match_indices
+            let filtered: Vec<usize> = search_state.filtered_indices().to_vec();
+
+            // Pre-compute match indices for all filtered branches
+            let match_indices_map: Vec<(usize, Vec<usize>)> = filtered
                 .iter()
-                .map(|branch| {
-                    // Build display line with tree indentation (consistent with dm log)
-                    let indent = format_indent(branch.depth);
-                    let marker = if branch.is_current {
-                        MARKER_CURRENT
-                    } else {
-                        MARKER_OTHER
-                    };
-                    let restack_indicator = if branch.needs_restack { " (needs restack)" } else { "" };
-
-                    let display = format!("{}{} {}{}", indent, marker, branch.name, restack_indicator);
-
-                    // Style: current branch in green, needs restack in yellow
-                    let style = if branch.is_current {
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                    } else if branch.needs_restack {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default()
-                    };
-
-                    ListItem::new(Line::from(vec![Span::styled(display, style)]))
+                .map(|&idx| {
+                    let branch_name = &rows[idx].name;
+                    (idx, search_state.get_match_indices(branch_name))
                 })
                 .collect();
+
+            let items: Vec<ListItem> = if filtered.is_empty() {
+                // No matches - show helpful message
+                vec![ListItem::new(Line::from(vec![Span::styled(
+                    NO_MATCHES_MESSAGE,
+                    Style::default().fg(Color::Yellow),
+                )]))]
+            } else {
+                match_indices_map
+                    .iter()
+                    .map(|(idx, match_indices)| {
+                        let branch = &rows[*idx];
+
+                        // Build styled spans with highlighting
+                        let indent = format_indent(branch.depth);
+                        let marker = if branch.is_current {
+                            MARKER_CURRENT
+                        } else {
+                            MARKER_OTHER
+                        };
+                        let restack_indicator = if branch.needs_restack { " (needs restack)" } else { "" };
+
+                        // Base style
+                        let base_style = if branch.is_current {
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        } else if branch.needs_restack {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default()
+                        };
+
+                        // Build spans with match highlighting
+                        let mut spans = vec![Span::styled(format!("{}{} ", indent, marker), base_style)];
+
+                        // Use shared highlighting logic
+                        spans.extend(highlight_matches(&branch.name, match_indices, base_style));
+                        spans.push(Span::styled(restack_indicator, base_style));
+
+                        ListItem::new(Line::from(spans))
+                    })
+                    .collect()
+            };
+
+            // Add match count to title
+            let total = rows.len();
+            let shown = filtered.len();
+            let title = if search_state.is_empty() {
+                format!(" Select Branch ({} branches) ", total)
+            } else {
+                format!(" Select Branch ({} of {} branches) ", shown, total)
+            };
 
             let list = List::new(items)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Select Branch to Checkout ")
+                        .title(title)
                         .title_style(Style::default().add_modifier(Modifier::BOLD)),
                 )
                 .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
                 .highlight_symbol("▶ ");
 
-            f.render_stateful_widget(list, chunks[0], &mut state);
-            let help = Paragraph::new("Enter: Select | q: Quit | j/k: Navigate | g/G: Top/Bottom")
-                .block(Block::default().borders(Borders::ALL));
-            f.render_widget(help, chunks[1]);
+            f.render_stateful_widget(list, chunks[1], &mut state);
+            let help =
+                Paragraph::new("Type to filter | Enter: Select | Esc: Clear/Quit | ↑↓/jk: Navigate | g/G: Top/Bottom")
+                    .block(Block::default().borders(Borders::ALL));
+            f.render_widget(help, chunks[2]);
         })?;
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+                    // Character input - add to search query
+                    KeyCode::Char(c) if c != 'q' && c != 'j' && c != 'k' && c != 'g' && c != 'G' => {
+                        search_state.push_char(c);
+                        search_state.filter(&rows, |branch| &branch.name);
+
+                        // Reset selection to first match
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
+                    }
+
+                    // Backspace - remove last character
+                    KeyCode::Backspace => {
+                        search_state.pop_char();
+                        search_state.filter(&rows, |branch| &branch.name);
+
+                        // Reset selection to first match
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
+                    }
+
+                    // Escape - clear search or exit
+                    KeyCode::Esc => {
+                        if search_state.is_empty() {
+                            return Ok(None); // Exit
+                        } else {
+                            search_state.clear();
+                            search_state.filter(&rows, |branch| &branch.name);
+
+                            // Restore selection to current branch
+                            let current_idx = find_current_branch_index(&rows);
+                            state.select(Some(current_idx));
+                        }
+                    }
+
+                    // Q - always quit
+                    KeyCode::Char('q') => return Ok(None),
+
+                    // Enter - select current branch
                     KeyCode::Enter => {
                         if let Some(i) = state.selected() {
-                            if i < rows.len() {
-                                return Ok(Some(rows[i].name.clone()));
+                            let filtered = search_state.filtered_indices();
+                            if i < filtered.len() {
+                                let original_idx = filtered[i];
+                                return Ok(Some(rows[original_idx].name.clone()));
                             }
                         }
                     }
+
+                    // Navigation through FILTERED list
                     KeyCode::Down | KeyCode::Char('j') => {
-                        let i = match state.selected() {
-                            Some(i) => {
-                                if i >= rows.len() - 1 {
-                                    0
-                                } else {
-                                    i + 1
+                        let max = search_state.filtered_indices().len();
+                        if max == 0 {
+                            state.select(None);
+                        } else {
+                            let i = match state.selected() {
+                                Some(i) => {
+                                    if i >= max - 1 {
+                                        0
+                                    } else {
+                                        i + 1
+                                    }
                                 }
-                            }
-                            None => 0,
-                        };
-                        state.select(Some(i));
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }
                     }
+
                     KeyCode::Up | KeyCode::Char('k') => {
-                        let i = match state.selected() {
-                            Some(i) => {
-                                if i == 0 {
-                                    rows.len() - 1
-                                } else {
-                                    i - 1
+                        let max = search_state.filtered_indices().len();
+                        if max == 0 {
+                            state.select(None);
+                        } else {
+                            let i = match state.selected() {
+                                Some(i) => {
+                                    if i == 0 {
+                                        max - 1
+                                    } else {
+                                        i - 1
+                                    }
                                 }
-                            }
-                            None => 0,
-                        };
-                        state.select(Some(i));
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }
                     }
-                    // Jump to top (consistent with dm log)
+
+                    // Jump to top
                     KeyCode::Char('g') | KeyCode::Home => {
-                        state.select(Some(0));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
                     }
-                    // Jump to bottom (consistent with dm log)
+
+                    // Jump to bottom
                     KeyCode::Char('G') | KeyCode::End => {
-                        state.select(Some(rows.len().saturating_sub(1)));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(search_state.filtered_indices().len().saturating_sub(1))
+                        });
                     }
+
                     _ => {}
                 }
             }

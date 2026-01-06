@@ -1,6 +1,7 @@
 //! TUI log output - interactive tree view with rich features.
 
 use anyhow::Result;
+use crate::ui::{highlight_matches, render_search_box, SearchState, NO_MATCHES_MESSAGE};
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
@@ -72,20 +73,37 @@ fn run_app(
     let current_idx = find_current_branch_index(&rows);
     state.select(Some(current_idx));
 
+    // Initialize fuzzy search state
+    let mut search_state = SearchState::new(rows.len());
+
     let mut pending_action = TuiAction::None;
 
     loop {
-        let selected_branch = state.selected().and_then(|i| rows.get(i)).map(|r| r.name.clone());
+        // Get selected branch from FILTERED indices
+        let selected_branch = state
+            .selected()
+            .and_then(|filtered_idx| {
+                let filtered = search_state.filtered_indices();
+                filtered
+                    .get(filtered_idx)
+                    .and_then(|&original_idx| rows.get(original_idx))
+            })
+            .map(|r| r.name.clone());
 
         terminal.draw(|f| {
-            // Create layout with main area and help bar
+            // Create layout with search box, main area, and help bar
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
+                    Constraint::Length(3), // Search box
                     Constraint::Min(0),    // Main content
-                    Constraint::Length(5), // Help bar (increased for more info)
+                    Constraint::Length(5), // Help bar
                 ])
                 .split(f.area());
+
+            // Render search input box
+            let search_widget = render_search_box(search_state.query());
+            f.render_widget(search_widget, chunks[0]);
 
             // Split main area into list and details
             let main_chunks = Layout::default()
@@ -94,10 +112,10 @@ fn run_app(
                     Constraint::Percentage(60), // Branch list
                     Constraint::Percentage(40), // Details panel
                 ])
-                .split(chunks[0]);
+                .split(chunks[1]);
 
-            // Render branch list
-            render_branch_list(f, main_chunks[0], &rows, &mut state);
+            // Render branch list with fuzzy search
+            render_branch_list(f, main_chunks[0], &rows, &mut state, &mut search_state);
 
             // Render details panel
             if let Some(ref branch) = selected_branch {
@@ -105,58 +123,127 @@ fn run_app(
             }
 
             // Render help bar
-            render_help_bar(f, chunks[1], selected_branch.as_deref(), current_branch);
+            render_help_bar(f, chunks[2], selected_branch.as_deref(), current_branch);
         })?;
 
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match key.code {
+                    // Character input - add to search query (exclude command keys)
+                    KeyCode::Char(c)
+                        if !matches!(c, 'q' | 'j' | 'k' | 'g' | 'G' | 'c' | 'd' | 'u' | 'n' | 't' | 'b' | '.') =>
+                    {
+                        search_state.push_char(c);
+                        search_state.filter(&rows, |branch| &branch.name);
+
+                        // Reset selection to first match
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
+                    }
+
+                    // Backspace - remove last character
+                    KeyCode::Backspace => {
+                        search_state.pop_char();
+                        search_state.filter(&rows, |branch| &branch.name);
+
+                        // Reset selection to first match
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
+                    }
+
+                    // Escape - clear search or exit
+                    KeyCode::Esc => {
+                        if search_state.is_empty() {
+                            pending_action = TuiAction::None;
+                            break;
+                        } else {
+                            search_state.clear();
+                            search_state.filter(&rows, |branch| &branch.name);
+
+                            // Restore selection to current branch
+                            let current_idx = find_current_branch_index(&rows);
+                            state.select(Some(current_idx));
+                        }
+                    }
+
                     // Quit
-                    KeyCode::Char('q') | KeyCode::Esc => {
+                    KeyCode::Char('q') => {
                         pending_action = TuiAction::None;
                         break;
                     }
 
-                    // Navigation
+                    // Navigation through FILTERED list
                     KeyCode::Down | KeyCode::Char('j') => {
-                        let i = match state.selected() {
-                            Some(i) => {
-                                if i >= rows.len() - 1 {
-                                    0
-                                } else {
-                                    i + 1
+                        let max = search_state.filtered_indices().len();
+                        if max == 0 {
+                            state.select(None);
+                        } else {
+                            let i = match state.selected() {
+                                Some(i) => {
+                                    if i >= max - 1 {
+                                        0
+                                    } else {
+                                        i + 1
+                                    }
                                 }
-                            }
-                            None => 0,
-                        };
-                        state.select(Some(i));
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        let i = match state.selected() {
-                            Some(i) => {
-                                if i == 0 {
-                                    rows.len() - 1
-                                } else {
-                                    i - 1
+                        let max = search_state.filtered_indices().len();
+                        if max == 0 {
+                            state.select(None);
+                        } else {
+                            let i = match state.selected() {
+                                Some(i) => {
+                                    if i == 0 {
+                                        max - 1
+                                    } else {
+                                        i - 1
+                                    }
                                 }
-                            }
-                            None => 0,
-                        };
-                        state.select(Some(i));
+                                None => 0,
+                            };
+                            state.select(Some(i));
+                        }
                     }
 
-                    // Jump to top/bottom
+                    // Jump to top/bottom of filtered list
                     KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::NONE) => {
-                        state.select(Some(0));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
                     }
                     KeyCode::Char('G') => {
-                        state.select(Some(rows.len().saturating_sub(1)));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(search_state.filtered_indices().len().saturating_sub(1))
+                        });
                     }
                     KeyCode::Home => {
-                        state.select(Some(0));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(0)
+                        });
                     }
                     KeyCode::End => {
-                        state.select(Some(rows.len().saturating_sub(1)));
+                        state.select(if search_state.filtered_indices().is_empty() {
+                            None
+                        } else {
+                            Some(search_state.filtered_indices().len().saturating_sub(1))
+                        });
                     }
 
                     // Actions
@@ -199,10 +286,15 @@ fn run_app(
                         break;
                     }
 
-                    // Jump to current branch
+                    // Jump to current branch in filtered list
                     KeyCode::Char('.') => {
-                        if let Some(idx) = rows.iter().position(|r| r.is_current) {
-                            state.select(Some(idx));
+                        // Find current branch in original rows
+                        if let Some(original_idx) = rows.iter().position(|r| r.is_current) {
+                            // Find its position in filtered indices
+                            let filtered = search_state.filtered_indices();
+                            if let Some(filtered_idx) = filtered.iter().position(|&idx| idx == original_idx) {
+                                state.select(Some(filtered_idx));
+                            }
                         }
                     }
 
@@ -215,15 +307,27 @@ fn run_app(
     // Handle pending action after exiting TUI
     match pending_action {
         TuiAction::Checkout => {
-            if let Some(branch) = state.selected().and_then(|i| rows.get(i)) {
-                println!("Checking out {}...", branch.name);
-                let _ = Command::new("dm").args(["checkout", &branch.name]).status();
+            // Map filtered index to original index
+            if let Some(filtered_idx) = state.selected() {
+                let filtered = search_state.filtered_indices();
+                if let Some(&original_idx) = filtered.get(filtered_idx) {
+                    if let Some(branch) = rows.get(original_idx) {
+                        println!("Checking out {}...", branch.name);
+                        let _ = Command::new("dm").args(["checkout", &branch.name]).status();
+                    }
+                }
             }
         }
         TuiAction::Delete => {
-            if let Some(branch) = state.selected().and_then(|i| rows.get(i)) {
-                println!("Deleting {}...", branch.name);
-                let _ = Command::new("dm").args(["delete", &branch.name]).status();
+            // Map filtered index to original index
+            if let Some(filtered_idx) = state.selected() {
+                let filtered = search_state.filtered_indices();
+                if let Some(&original_idx) = filtered.get(filtered_idx) {
+                    if let Some(branch) = rows.get(original_idx) {
+                        println!("Deleting {}...", branch.name);
+                        let _ = Command::new("dm").args(["delete", &branch.name]).status();
+                    }
+                }
             }
         }
         TuiAction::NavigateUp => {
@@ -244,56 +348,98 @@ fn run_app(
     Ok(())
 }
 
-/// Render the branch list with tree visualization
+/// Render the branch list with tree visualization and fuzzy search filtering
 /// Uses simple vertical format: trunk at bottom, branches above
-fn render_branch_list(f: &mut ratatui::Frame, area: Rect, rows: &[BranchDisplay], state: &mut ListState) {
-    let items: Vec<ListItem> = rows
+fn render_branch_list(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    rows: &[BranchDisplay],
+    state: &mut ListState,
+    search_state: &mut SearchState,
+) {
+    // Build items from FILTERED indices with match highlighting
+    // Clone filtered indices to avoid borrow conflicts with mutable get_match_indices
+    let filtered: Vec<usize> = search_state.filtered_indices().to_vec();
+
+    // Pre-compute match indices for all filtered branches
+    let match_indices_map: Vec<(usize, Vec<usize>)> = filtered
         .iter()
-        .map(|branch| {
-            // Use depth-based indentation with simple vertical lines
-            let indent = format_indent(branch.depth);
+        .map(|&idx| {
+            let branch_name = &rows[idx].name;
+            (idx, search_state.get_match_indices(branch_name))
+        })
+        .collect();
 
-            // Current branch marker (using shared constants)
-            let marker = if branch.is_current {
-                MARKER_CURRENT
-            } else {
-                MARKER_OTHER
-            };
+    let items: Vec<ListItem> = if filtered.is_empty() {
+        // No matches - show helpful message
+        vec![ListItem::new(Line::from(vec![Span::styled(
+            NO_MATCHES_MESSAGE,
+            Style::default().fg(Color::Yellow),
+        )]))]
+    } else {
+        match_indices_map
+            .iter()
+            .map(|(idx, match_indices)| {
+                let branch = &rows[*idx];
 
-            // Needs restack indicator
-            let restack_indicator = if branch.needs_restack { " (needs restack)" } else { "" };
+                // Use depth-based indentation with simple vertical lines
+                let indent = format_indent(branch.depth);
 
-            // Build the display line
-            let branch_display = format!(
-                "{}{} {}{}{}",
-                indent,
-                marker,
-                branch.name,
-                restack_indicator,
-                if !branch.commit_time.is_empty() {
+                // Current branch marker (using shared constants)
+                let marker = if branch.is_current {
+                    MARKER_CURRENT
+                } else {
+                    MARKER_OTHER
+                };
+
+                // Needs restack indicator
+                let restack_indicator = if branch.needs_restack { " (needs restack)" } else { "" };
+
+                // Time indicator
+                let time_indicator = if !branch.commit_time.is_empty() {
                     format!(" ({})", branch.commit_time)
                 } else {
                     String::new()
-                }
-            );
+                };
 
-            let style = if branch.is_current {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-            } else if branch.needs_restack {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
+                // Base style
+                let base_style = if branch.is_current {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else if branch.needs_restack {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
 
-            ListItem::new(Line::from(vec![Span::styled(branch_display, style)]))
-        })
-        .collect();
+                // Build spans with match highlighting
+                let mut spans = vec![Span::styled(format!("{}{} ", indent, marker), base_style)];
+
+                // Use shared highlighting logic for branch name
+                spans.extend(highlight_matches(&branch.name, match_indices, base_style));
+
+                // Add indicators
+                spans.push(Span::styled(restack_indicator, base_style));
+                spans.push(Span::styled(time_indicator, base_style));
+
+                ListItem::new(Line::from(spans))
+            })
+            .collect()
+    };
+
+    // Add match count to title
+    let total = rows.len();
+    let shown = filtered.len();
+    let title = if search_state.is_empty() {
+        format!(" Stack ({} branches) ", total)
+    } else {
+        format!(" Stack ({} of {} branches) ", shown, total)
+    };
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Stack ")
+                .title(title)
                 .title_style(Style::default().add_modifier(Modifier::BOLD)),
         )
         .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
@@ -451,9 +597,8 @@ fn render_details_panel(
 fn render_help_bar(f: &mut ratatui::Frame, area: Rect, selected_branch: Option<&str>, current_branch: &str) {
     let is_on_current = selected_branch == Some(current_branch);
 
-    let nav_help = Span::styled("↑/↓ j/k: Navigate  ", Style::default().fg(Color::DarkGray));
-
-    let jump_help = Span::styled("g/G: Top/Bottom  .: Current  ", Style::default().fg(Color::DarkGray));
+    // Line 1: Search and main actions
+    let search_help = Span::styled("Type to filter  ", Style::default().fg(Color::Cyan));
 
     let checkout_help = if is_on_current {
         Span::styled("Enter/c: (on current)  ", Style::default().fg(Color::DarkGray))
@@ -467,15 +612,21 @@ fn render_help_bar(f: &mut ratatui::Frame, area: Rect, selected_branch: Option<&
         Span::styled("d: Delete  ", Style::default().fg(Color::Red))
     };
 
+    let quit_help = Span::styled("Esc: Clear/Quit  ", Style::default().fg(Color::DarkGray));
+
+    // Line 2: Navigation
+    let nav_help = Span::styled("↑/↓ j/k: Navigate  ", Style::default().fg(Color::DarkGray));
+    let jump_help = Span::styled("g/G: Top/Bottom  .: Current  ", Style::default().fg(Color::DarkGray));
+
     let stack_help = Span::styled(
         "u/n: Up/Down stack  t/b: Top/Bottom stack  ",
         Style::default().fg(Color::Yellow),
     );
 
-    let quit_help = Span::styled("q: Quit", Style::default().fg(Color::DarkGray));
+    let quit_key = Span::styled("q: Quit", Style::default().fg(Color::DarkGray));
 
-    let line1 = Line::from(vec![nav_help, jump_help, checkout_help, delete_help]);
-    let line2 = Line::from(vec![stack_help, quit_help]);
+    let line1 = Line::from(vec![search_help, checkout_help, delete_help, quit_help]);
+    let line2 = Line::from(vec![nav_help, jump_help, stack_help, quit_key]);
 
     let help = Paragraph::new(vec![line1, line2]).block(
         Block::default()
