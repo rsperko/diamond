@@ -251,7 +251,7 @@ _release bump_type:
     # 9. Run tests one final time
     echo ""
     echo "🧪 Running final test suite..."
-    if ! cargo test --quiet; then
+    if ! cargo nextest run --hide-progress-bar --success-output never --failure-output immediate-final; then
         echo "❌ Tests failed! Aborting release."
         git checkout Cargo.toml CHANGELOG.md
         exit 1
