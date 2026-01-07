@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Automated GitHub releases and Homebrew tap publishing**: CI/CD workflow now automatically creates GitHub releases and publishes to Homebrew tap on version tags.
+- **Verbose debugging for forge operations**: Added `--verbose` flag to forge commands for better error diagnosis.
+
+### Changed
+- **Improved UX for submit stack workflow**: Cleaner output and better progress reporting when submitting multiple PRs.
+- **Enhanced sync command messages**: More informative output during sync operations with better conflict reporting.
+- **Major navigation command improvements**: Better status checking, worktree handling, and user prompts for `up`, `down`, `top`, `bottom`, `checkout` commands.
+
+### Documentation
+- **New Getting Started guide**: Added comprehensive `docs/GETTING_STARTED.md` for new users.
+- **Expanded configuration documentation**: Enhanced `docs/CONFIGURATION.md` with more examples and options.
+- **Streamlined README**: Simplified main README and moved detailed content to focused documentation files.
+
 ## [0.1.2] - 2026-01-05
 
 ### Added
