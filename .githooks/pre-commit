@@ -55,4 +55,13 @@ if echo "$AUTHOR_NAME" | grep -qi "test user" || echo "$AUTHOR_EMAIL" | grep -qi
     FAILED=1
 fi
 
+# Check 3: Run personal pre-commit checks if they exist
+# Developers can add their own checks in .git/hooks/pre-commit.local (not tracked)
+if [ -f .git/hooks/pre-commit.local ]; then
+    .git/hooks/pre-commit.local
+    if [ $? -ne 0 ]; then
+        FAILED=1
+    fi
+fi
+
 exit $FAILED
