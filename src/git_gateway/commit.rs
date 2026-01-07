@@ -20,6 +20,31 @@ impl GitGateway {
         self.backend.stage_updates()
     }
 
+    /// Stage changes interactively with hunk selection (git add -p)
+    ///
+    /// Opens an interactive prompt for the user to select which hunks to stage.
+    /// This allows precise control over what gets committed.
+    ///
+    /// Requires a terminal (TTY). Will fail in non-interactive mode.
+    pub fn stage_patch(&self) -> Result<()> {
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            bail!("--patch requires a terminal for interactive hunk selection. Cannot run in non-interactive mode.");
+        }
+
+        let workdir = &self.workdir;
+
+        let status = std::process::Command::new("git")
+            .args(["add", "--patch"])
+            .current_dir(workdir)
+            .status()
+            .context("Failed to run git add --patch")?;
+
+        if !status.success() {
+            bail!("git add --patch failed (may have been cancelled)");
+        }
+        Ok(())
+    }
+
     /// Stage a specific file
     pub fn stage_file(&self, path: &str) -> Result<()> {
         self.backend.stage_file(path)
@@ -283,5 +308,38 @@ impl GitGateway {
         }
 
         Ok(output.stdout)
+    }
+
+    /// Show diffstat for the HEAD commit (git show --stat HEAD)
+    ///
+    /// Displays a summary of files changed with insertions/deletions count.
+    /// This provides immediate feedback after creating or amending commits.
+    ///
+    /// Example output:
+    /// ```text
+    ///   src/auth/login.rs      | 45 ++++++++++++++++++++++++++++++++++++
+    ///   src/auth/mod.rs        |  1 +
+    ///   tests/auth_tests.rs    | 23 ++++++++++++++++++
+    ///   3 files changed, 69 insertions(+)
+    /// ```
+    pub fn show_commit_diffstat(&self) -> Result<()> {
+        let output = std::process::Command::new("git")
+            .args(["show", "--stat", "--format=", "HEAD"])
+            .current_dir(&self.workdir)
+            .output()
+            .context("Failed to run git show --stat HEAD")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("Failed to show commit diffstat: {}", stderr.trim());
+        }
+
+        // Print the diffstat (already formatted by git)
+        let diffstat = String::from_utf8_lossy(&output.stdout);
+        if !diffstat.trim().is_empty() {
+            print!("{}", diffstat);
+        }
+
+        Ok(())
     }
 }
