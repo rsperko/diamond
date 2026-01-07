@@ -149,10 +149,8 @@ pub async fn run(
     let pr_results = async_forge.check_prs_exist(&branches_to_check).await;
     let pr_cache: PrCache = pr_results.into_iter().collect();
 
-    // Collect newly created PR URLs
-    let mut created_urls: Vec<String> = Vec::new();
-
-    if stack {
+    // Submit branches and collect results
+    let results: Vec<submission::SubmitResult> = if stack {
         submit_stack(
             &current,
             &ref_store,
@@ -160,44 +158,76 @@ pub async fn run(
             forge.as_ref(),
             force,
             &options,
-            &mut created_urls,
             update_only,
             &pr_cache,
-        )?;
+        )?
     } else {
-        submit_branch(
+        // Single branch submission
+        if let Some(result) = submit_branch(
             &current,
             &ref_store,
             &gateway,
             forge.as_ref(),
             force,
             &options,
-            &mut created_urls,
             update_only,
             &pr_cache,
-        )?;
-    }
+            None, // No progress counter for single branch
+        )? {
+            vec![result]
+        } else {
+            vec![]
+        }
+    };
 
-    // Show summary
-    if !created_urls.is_empty() {
+    // Show summary if any PRs were submitted
+    if !results.is_empty() {
+        let created_count = results.iter().filter(|r| r.created).count();
+        let updated_count = results.len() - created_count;
+
+        println!("\nSummary:");
+        for result in &results {
+            let action = if result.created { "created" } else { "updated" };
+            println!("  • {}: {} ({})", result.branch, result.url.blue(), action);
+        }
+        println!();
+
+        // Build stats message
+        let mut stats_parts = Vec::new();
+        if created_count > 0 {
+            stats_parts.push(format!("{} created", created_count));
+        }
+        if updated_count > 0 {
+            stats_parts.push(format!("{} updated", updated_count));
+        }
+        let stats = if stats_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", stats_parts.join(", "))
+        };
+
         println!(
-            "\n{} Created {} PR{}",
+            "{} Submitted {} PR{}{}",
             "✓".green().bold(),
-            created_urls.len(),
-            if created_urls.len() == 1 { "" } else { "s" }
+            results.len(),
+            if results.len() == 1 { "" } else { "s" },
+            stats
         );
 
         // Update stack visualization in all PRs (once, at the end, using async for parallelism)
         let full_stack = collect_full_stack(&current, &ref_store)?;
         // Show beautiful progress - the tracker handles the summary output
         let _updated = update_stack_visualization_async(&full_stack, async_forge.as_ref(), &ref_store, true).await?;
-    }
 
-    // Open newly created PRs in browser (unless --no-open)
-    if !no_open && !created_urls.is_empty() {
-        for url in &created_urls {
-            if let Err(e) = open::that(url) {
-                eprintln!("{} Failed to open {}: {}", "⚠".yellow(), url, e);
+        // Open newly created PRs in browser (unless --no-open)
+        if !no_open {
+            let created_urls: Vec<&String> = results.iter().filter(|r| r.created).map(|r| &r.url).collect();
+            if !created_urls.is_empty() {
+                for url in &created_urls {
+                    if let Err(e) = open::that(url) {
+                        eprintln!("{} Failed to open {}: {}", "⚠".yellow(), url, e);
+                    }
+                }
             }
         }
     }
