@@ -31,7 +31,7 @@ pub fn run() -> Result<()> {
     if top == current {
         println!("{} Already at stack top", "✓".green().bold());
     } else {
-        gateway.checkout_branch_safe(&top)?;
+        gateway.checkout_branch_worktree_safe(&top)?;
         println!("{} Jumped to top: {}", "✓".green().bold(), top.green());
     }
 
@@ -162,5 +162,54 @@ mod tests {
         // Should succeed (already at top)
         let result = run();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_top_with_uncommitted_changes_fails() {
+        let dir = tempdir().unwrap();
+        let repo = init_test_repo(dir.path()).unwrap();
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new().unwrap();
+        let ref_store = RefStore::new().unwrap();
+
+        // Create and commit a tracked file on main
+        std::fs::write(dir.path().join("tracked.txt"), "original").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("tracked.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Add tracked file", &tree, &[&parent])
+            .unwrap();
+
+        // Set up stack: main -> middle -> top
+        ref_store.set_trunk("main").unwrap();
+        gateway.create_branch("middle").unwrap();
+        ref_store.set_parent("middle", "main").unwrap();
+        gateway.create_branch("top").unwrap();
+        ref_store.set_parent("top", "middle").unwrap();
+
+        // Go back to main
+        gateway.checkout_branch("main").unwrap();
+
+        // Modify the tracked file without committing
+        std::fs::write(dir.path().join("tracked.txt"), "modified").unwrap();
+
+        // Try to navigate to top - should fail with uncommitted changes
+        let result = run();
+        assert!(result.is_err(), "dm top should fail with uncommitted changes");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("uncommitted changes"),
+            "Error should mention uncommitted changes: {}",
+            err_msg
+        );
+
+        // Should still be on main
+        assert_eq!(gateway.get_current_branch_name().unwrap(), "main");
     }
 }

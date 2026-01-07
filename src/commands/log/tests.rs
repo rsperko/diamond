@@ -76,7 +76,7 @@ fn test_build_branch_tree_with_depth() -> anyhow::Result<()> {
     repo.branch("level2", &head, false)?;
 
     let gateway = GitGateway::from_path(dir.path())?;
-    gateway.checkout_branch("level1")?;
+    gateway.checkout_branch_worktree_safe("level1")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -119,7 +119,7 @@ fn test_needs_restack_indicator() -> anyhow::Result<()> {
     assert!(!feature_row.needs_restack);
 
     // Now add a commit to main (simulate parent moving ahead)
-    gateway.checkout_branch("main")?;
+    gateway.checkout_branch_worktree_safe("main")?;
     std::fs::write(dir.path().join("new_file.txt"), "content")?;
     let mut index = repo.index()?;
     index.add_path(std::path::Path::new("new_file.txt"))?;
@@ -288,7 +288,7 @@ fn test_build_branch_tree_untracked_current_branch() -> anyhow::Result<()> {
     repo.branch("untracked", &head, false)?;
 
     let gateway = GitGateway::from_path(dir.path())?;
-    gateway.checkout_branch("untracked")?; // Current branch is untracked
+    gateway.checkout_branch_worktree_safe("untracked")?; // Current branch is untracked
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;

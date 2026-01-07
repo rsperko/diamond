@@ -90,6 +90,110 @@ fn test_something() -> Result<()> {
 
 **If you catch yourself writing implementation before a failing test exists, STOP immediately and write the test first.**
 
+### 5. 💎 UX Principles for Enterprise-Grade CLI
+
+#### Error Messages: Inform, Don't Prescribe
+
+```rust
+// ❌ Bad - assumes destructive intent, prescribes solution
+bail!("Worktree exists at {}. Remove it: git worktree remove {}", path, path);
+
+// ✅ Good - informs, lets user decide
+bail!("Branch '{}' is already checked out at: {}", name, path);
+```
+
+**Rules**:
+- Show data you already have (don't make users run extra commands)
+- Use real values, not `<placeholders>`
+- Don't assume intent, especially for destructive actions
+- Don't suggest commands when multiple valid approaches exist
+- Professional tone (no emoji spam)
+
+#### TTY Detection: Mandatory for Interactive Features
+
+```rust
+// Before TUI
+if !std::io::stdout().is_terminal() {
+    bail!("This command requires a terminal. Use --format=short for scripts.");
+}
+
+// Before prompts
+if !std::io::stdin().is_terminal() {
+    bail!("This command requires confirmation. Use --force to skip.");
+}
+```
+
+**Without this check, tests and CI hang forever.**
+
+#### Batch Operations: Reduce Cognitive Load
+
+```rust
+// ❌ Bad - N prompts for N items (cognitive overload)
+for branch in merged_branches {
+    if ui::confirm(&format!("Delete {}?", branch))? { ... }
+}
+
+// ✅ Good - Single batch selection
+let to_delete = ui::select_multi("Select branches to delete", &merged_branches)?;
+```
+
+**Pattern**: One TUI selector with "all/none/select" beats N individual prompts.
+
+#### Progressive Disclosure: Signal Over Noise
+
+```rust
+// Default: Show summary
+println!("✓ 15 branches already in sync");
+
+// --verbose: Show all details
+if verbose {
+    for branch in branches {
+        println!("[{}/{}] {} already up to date", i, total, branch);
+    }
+}
+```
+
+**Rule**: Default output = signal only. Use `--verbose` for complete logs.
+
+#### Terminal Features: Degrade Gracefully
+
+```rust
+// OSC 8 hyperlinks - invisible in unsupported terminals
+pub fn hyperlink(url: &str, text: &str) -> String {
+    if !std::io::stdout().is_terminal() {
+        return text.to_string();  // Plain text in pipes/files
+    }
+    format!("\x1b]8;;{}\x07{}\x1b]8;;\x07", url, text)  // Clickable in iTerm2/VSCode
+}
+```
+
+**Rule**: Escape sequences must never break output in unsupported environments.
+
+#### Feature Validation: Question Before Building
+
+**Before adding a flag or feature**:
+1. Research if it's a common CLI pattern (check: git, cargo, gh, npm)
+2. Verify existing functionality doesn't already solve it
+3. Err toward simplicity
+
+**Example**: Removed `--decorators` flag because it's not standard practice in professional CLIs.
+
+#### Vocabulary & Standards
+
+- **Branch** (not "ref" or "head")
+- **Stack** (tree of branches)
+- **Trunk** (main/master)
+- **--force** for skip confirmation (NEVER `--yes`, `--skip-prompt`, `--no-interactive`)
+
+#### Validation Checklist
+
+- [ ] Error passes "3am test" (fixable without Googling)
+- [ ] No `<placeholders>` in commands
+- [ ] TTY detection for interactive code
+- [ ] Consistent flags (`--force`, `--verbose`)
+- [ ] Silent success (no unnecessary celebration)
+- [ ] No assumed destructive intent
+
 ## Project Structure & Module Organization
 
 - `Cargo.toml` / `Cargo.lock`: Rust workspace metadata and dependency locks.

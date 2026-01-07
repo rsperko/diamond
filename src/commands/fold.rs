@@ -48,7 +48,7 @@ pub fn run(keep_name: bool) -> Result<()> {
     let final_name = if keep_name { current.clone() } else { parent.clone() };
 
     // Checkout parent and fast-forward to current
-    gateway.checkout_branch(&parent)?;
+    gateway.checkout_branch_worktree_safe(&parent)?;
     gateway.merge_branch_ff(&current)?;
 
     // If keeping name, delete current branch then rename parent to current's name

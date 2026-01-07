@@ -12,6 +12,7 @@
 
 use std::io::IsTerminal;
 
+mod conflict;
 mod output;
 mod pr_progress;
 mod progress;
@@ -19,6 +20,7 @@ mod prompt;
 mod section;
 mod style;
 
+pub use conflict::*;
 pub use output::*;
 pub use pr_progress::*;
 pub use progress::*;

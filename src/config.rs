@@ -14,6 +14,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::PathBuf;
 
+use crate::platform::DisplayPath;
 use crate::state::find_git_root;
 
 /// Default remote name
@@ -203,7 +204,11 @@ impl Config {
         match toml::from_str(&content) {
             Ok(config) => Ok(config),
             Err(e) => {
-                eprintln!("Warning: Config file {:?} is invalid ({}), using defaults", path, e);
+                eprintln!(
+                    "Warning: Config file {} is invalid ({}), using defaults",
+                    DisplayPath(path),
+                    e
+                );
                 Ok(T::default())
             }
         }

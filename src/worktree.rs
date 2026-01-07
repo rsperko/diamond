@@ -10,6 +10,7 @@
 //! - Validate current worktree state at command startup
 
 use anyhow::{Context, Result};
+use crate::platform::DisplayPath;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -106,10 +107,31 @@ pub fn get_worktree_status() -> Result<WorktreeStatus> {
     })
 }
 
-/// Check if a specific branch is checked out in any other worktree.
-pub fn is_branch_in_other_worktree(branch: &str) -> Result<bool> {
-    let status = get_worktree_status()?;
-    Ok(status.branches_in_other_worktrees.contains(&branch.to_string()))
+/// Get the path where a specific branch is checked out (in another worktree).
+/// Returns None if the branch is not checked out in any other worktree.
+/// Returns None if worktree listing fails (e.g., not in a git repo or single worktree).
+pub fn get_worktree_path_for_branch(branch: &str) -> Result<Option<PathBuf>> {
+    // If listing worktrees fails (e.g., not in a git repo, repo deleted, single worktree),
+    // treat it as "no other worktrees exist" and return None instead of propagating error
+    let worktrees = match list_worktrees() {
+        Ok(wt) => wt,
+        Err(_) => return Ok(None),
+    };
+
+    for wt in worktrees {
+        // Skip current worktree and bare repos
+        if wt.is_current || wt.is_bare {
+            continue;
+        }
+
+        if let Some(ref wt_branch) = wt.branch {
+            if wt_branch == branch {
+                return Ok(Some(wt.path));
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 /// Check if any branches in the list are checked out in other worktrees.
@@ -222,32 +244,32 @@ pub fn check_branches_for_worktree_conflicts_enhanced(branches: &[String]) -> Re
                         state_conflicts.push(format!(
                             "'{}' checked out at {} (has uncommitted changes)",
                             branch,
-                            wt.path.display()
+                            DisplayPath(&wt.path)
                         ));
                     }
                     Ok(WorktreeState::MidRebase) => {
                         state_conflicts.push(format!(
                             "'{}' checked out at {} (rebase in progress)",
                             branch,
-                            wt.path.display()
+                            DisplayPath(&wt.path)
                         ));
                     }
                     Ok(WorktreeState::MidMerge) => {
                         state_conflicts.push(format!(
                             "'{}' checked out at {} (merge in progress)",
                             branch,
-                            wt.path.display()
+                            DisplayPath(&wt.path)
                         ));
                     }
                     Ok(WorktreeState::MidCherryPick) => {
                         state_conflicts.push(format!(
                             "'{}' checked out at {} (cherry-pick in progress)",
                             branch,
-                            wt.path.display()
+                            DisplayPath(&wt.path)
                         ));
                     }
                     Ok(WorktreeState::Clean) | Err(_) => {
-                        conflicts.push(format!("'{}' checked out at {}", branch, wt.path.display()));
+                        conflicts.push(format!("'{}' checked out at {}", branch, DisplayPath(&wt.path)));
                     }
                 }
             }
@@ -320,7 +342,10 @@ pub fn list_worktrees() -> Result<Vec<WorktreeInfo>> {
             }
 
             let path_str = line.strip_prefix("worktree ").unwrap_or("");
-            current_path = Some(PathBuf::from(path_str));
+            let path = PathBuf::from(path_str);
+            // Canonicalize to normalize path separators for the platform
+            // For worktrees, paths should always exist, but fall back to raw path if needed
+            current_path = Some(path.canonicalize().unwrap_or(path));
         } else if line.starts_with("branch refs/heads/") {
             current_branch = line.strip_prefix("branch refs/heads/").map(|s| s.to_string());
         } else if line == "bare" {
@@ -428,7 +453,7 @@ pub fn validate_current_worktree() -> Result<()> {
              1. Switch to an existing branch: git checkout <branch>\n\
              2. Or remove this worktree: git worktree remove {}",
             branch,
-            current.path.display()
+            DisplayPath(&current.path)
         );
     }
 
@@ -519,7 +544,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn test_is_branch_in_other_worktree() {
+    fn test_get_worktree_path_for_branch() {
         let dir = tempdir().unwrap();
         let main_path = dir.path().join("main");
         let wt_path = dir.path().join("worktree");
@@ -536,10 +561,19 @@ mod tests {
 
         let _guard = DirGuard::new(&main_path);
 
-        assert!(is_branch_in_other_worktree("locked-branch").unwrap());
-        assert!(!is_branch_in_other_worktree("nonexistent-branch").unwrap());
+        // Branch in other worktree should return the path
+        let path = get_worktree_path_for_branch("locked-branch").unwrap();
+        assert!(path.is_some());
+        // Canonicalize both paths for comparison (handles /var vs /private/var on macOS)
+        let returned_path = path.unwrap().canonicalize().unwrap();
+        let expected_path = wt_path.canonicalize().unwrap();
+        assert_eq!(returned_path, expected_path);
+
+        // Nonexistent branch should return None
+        assert!(get_worktree_path_for_branch("nonexistent-branch").unwrap().is_none());
+
         // master/main (current branch) should NOT be in other worktrees
-        assert!(!is_branch_in_other_worktree("master").unwrap());
+        assert!(get_worktree_path_for_branch("master").unwrap().is_none());
     }
 
     #[test]
@@ -717,6 +751,60 @@ mod tests {
         let feature_wt = worktrees.iter().find(|wt| wt.branch.as_deref() == Some("feature"));
         assert!(feature_wt.is_some());
         assert!(!feature_wt.unwrap().is_current);
+    }
+
+    #[test]
+    #[serial]
+    fn test_list_worktrees_returns_normalized_paths() {
+        // This test verifies that paths returned from list_worktrees() are normalized
+        // to use the platform's native path separators. This is critical for Windows
+        // where git outputs forward slashes but PathBuf uses backslashes.
+        let dir = tempdir().unwrap();
+        let main_path = dir.path().join("main");
+        let wt_path = dir.path().join("worktree");
+
+        std::fs::create_dir_all(&main_path).unwrap();
+        init_test_repo(&main_path);
+
+        // Create a worktree
+        Command::new("git")
+            .args(["worktree", "add", wt_path.to_str().unwrap(), "-b", "feature"])
+            .current_dir(&main_path)
+            .output()
+            .expect("git worktree add failed");
+
+        let _guard = DirGuard::new(&main_path);
+
+        let worktrees = list_worktrees().unwrap();
+        assert_eq!(worktrees.len(), 2);
+
+        // Find the feature branch worktree
+        let feature_wt = worktrees.iter().find(|wt| wt.branch.as_deref() == Some("feature"));
+        assert!(feature_wt.is_some());
+        let feature_wt = feature_wt.unwrap();
+
+        // CRITICAL: Verify that the path can be string-compared with a PathBuf-created path
+        // This catches the Windows issue where git outputs "C:/foo/bar" but PathBuf uses "C:\foo\bar"
+        let wt_path_str = wt_path.canonicalize().unwrap().to_string_lossy().to_string();
+        let returned_path_str = feature_wt.path.to_string_lossy().to_string();
+
+        assert_eq!(
+            returned_path_str, wt_path_str,
+            "Worktree path should be normalized to match platform PathBuf format.\n\
+             Expected: {}\n\
+             Got: {}",
+            wt_path_str, returned_path_str
+        );
+
+        // ALSO verify that when displayed, the path doesn't have Windows UNC prefix
+        let displayed = format!("{}", DisplayPath(&feature_wt.path));
+        if cfg!(windows) {
+            assert!(
+                !displayed.starts_with(r"\\?\"),
+                "Display path should not contain Windows UNC prefix: {}",
+                displayed
+            );
+        }
     }
 
     // =========================================================================
@@ -958,5 +1046,57 @@ mod tests {
         let _guard = DirGuard::new(&main_path);
 
         assert!(has_multiple_worktrees().unwrap());
+    }
+
+    #[test]
+    #[serial]
+    fn test_checkout_error_message_is_user_friendly() {
+        // This test verifies that the actual error message from trying to checkout
+        // a branch in another worktree doesn't contain Windows UNC prefix
+        let dir = tempdir().unwrap();
+        let main_path = dir.path().join("main");
+        let wt_path = dir.path().join("worktree");
+
+        std::fs::create_dir_all(&main_path).unwrap();
+        init_test_repo(&main_path);
+
+        // Create a worktree with a branch
+        Command::new("git")
+            .args(["worktree", "add", wt_path.to_str().unwrap(), "-b", "locked-branch"])
+            .current_dir(&main_path)
+            .output()
+            .expect("git worktree add failed");
+
+        let _guard = DirGuard::new(&main_path);
+        let _ctx = crate::test_context::TestRepoContext::new(&main_path);
+
+        // Try to checkout the locked branch from the main worktree using GitGateway
+        let gateway = crate::git_gateway::GitGateway::new().unwrap();
+        let result = gateway.checkout_branch_worktree_safe("locked-branch");
+
+        // Should fail
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+
+        // Verify error message is informative
+        assert!(err_msg.contains("already checked out"));
+
+        // CRITICAL: Verify no Windows UNC prefix in the error message
+        if cfg!(windows) {
+            assert!(
+                !err_msg.contains(r"\\?\"),
+                "Error message should not contain Windows UNC prefix: {}",
+                err_msg
+            );
+        }
+
+        // Verify the actual path is shown (not a placeholder)
+        // The error should contain some recognizable part of the path
+        let path_str = wt_path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            err_msg.contains("worktree") || err_msg.contains(&path_str),
+            "Error message should show the actual path: {}",
+            err_msg
+        );
     }
 }

@@ -194,7 +194,7 @@ fn run_into(
 
     // Switch to target branch first (worktree changes are carried over)
     println!("Switching to '{}' to apply changes...", target_branch);
-    gateway.checkout_branch(target_branch)?;
+    gateway.checkout_branch_worktree_safe(target_branch)?;
 
     // Stage changes AFTER switching branches (so they apply to target)
     if all {
@@ -221,7 +221,7 @@ fn run_into(
     restack::restack_children(target_branch)?;
 
     // Return to original branch
-    gateway.checkout_branch(current_branch)?;
+    gateway.checkout_branch_worktree_safe(current_branch)?;
     println!("Returned to '{}'", current_branch);
 
     Ok(())
@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(gateway.get_current_branch_name()?, "child");
 
         // Verify parent commit was amended
-        gateway.checkout_branch("parent")?;
+        gateway.checkout_branch_worktree_safe("parent")?;
         let repo = git2::Repository::open(dir.path())?;
         let head = repo.head()?.peel_to_commit()?;
         assert_eq!(head.message(), Some("Fixed parent"));
@@ -634,7 +634,7 @@ mod tests {
         gateway.create_branch("branch-a")?;
         ref_store.set_parent("branch-a", "main")?;
 
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         gateway.create_branch("branch-b")?;
         ref_store.set_parent("branch-b", "main")?;
 
@@ -675,7 +675,7 @@ mod tests {
 
         // Create two branches
         gateway.create_branch("branch-a")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         gateway.create_branch("branch-b")?;
 
         // Create a cycle in metadata: branch-a -> branch-b -> branch-a
@@ -874,24 +874,24 @@ mod tests {
         // Create stack: main -> A -> B
         gateway.create_branch("A")?;
         ref_store.set_parent("A", "main")?;
-        gateway.checkout_branch("A")?;
+        gateway.checkout_branch_worktree_safe("A")?;
         fs::write(dir.path().join("a.txt"), "a")?;
         gateway.stage_all()?;
         gateway.commit("A commit")?;
 
         gateway.create_branch("B")?;
         ref_store.set_parent("B", "A")?;
-        gateway.checkout_branch("B")?;
+        gateway.checkout_branch_worktree_safe("B")?;
         fs::write(dir.path().join("b.txt"), "b")?;
         gateway.stage_all()?;
         gateway.commit("B commit")?;
 
         // Delete A using git directly (bypassing Diamond)
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         repo.find_branch("A", git2::BranchType::Local)?.delete()?;
 
         // Checkout B again
-        gateway.checkout_branch("B")?;
+        gateway.checkout_branch_worktree_safe("B")?;
 
         // Make a change
         fs::write(dir.path().join("change.txt"), "change")?;
@@ -941,14 +941,14 @@ mod tests {
         // Create stack: main -> A -> B
         gateway.create_branch("A")?;
         ref_store.set_parent("A", "main")?;
-        gateway.checkout_branch("A")?;
+        gateway.checkout_branch_worktree_safe("A")?;
         fs::write(dir.path().join("a.txt"), "a")?;
         gateway.stage_all()?;
         gateway.commit("A commit")?;
 
         gateway.create_branch("B")?;
         ref_store.set_parent("B", "A")?;
-        gateway.checkout_branch("B")?;
+        gateway.checkout_branch_worktree_safe("B")?;
         fs::write(dir.path().join("b.txt"), "b")?;
         gateway.stage_all()?;
         gateway.commit("B commit")?;

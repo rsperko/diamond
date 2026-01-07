@@ -461,6 +461,7 @@ fn test_cleanup_backups_by_age() -> Result<()> {
 
     let dir = tempdir()?;
     let _repo = init_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
     let gateway = GitGateway::from_path(dir.path())?;
 
     gateway.create_branch("feature")?;
@@ -512,6 +513,7 @@ fn test_cleanup_backups_by_age() -> Result<()> {
 fn test_cleanup_backups_by_age_keeps_recent() -> Result<()> {
     let dir = tempdir()?;
     let _repo = init_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
     let gateway = GitGateway::from_path(dir.path())?;
 
     gateway.create_branch("feature")?;
@@ -2634,7 +2636,7 @@ fn test_create_branch_preserves_staged_changes() -> Result<()> {
 #[test]
 fn test_force_checkout_overwrites_uncommitted_changes() -> Result<()> {
     // GitGateway::checkout_branch uses force mode, so it should overwrite
-    // uncommitted changes (unlike checkout_branch_safe which refuses)
+    // uncommitted changes (unlike checkout_branch_worktree_safe which refuses)
     let dir = tempdir()?;
     let _repo = init_repo(dir.path())?;
     let _ctx = TestRepoContext::new(dir.path());
@@ -2664,6 +2666,78 @@ fn test_force_checkout_overwrites_uncommitted_changes() -> Result<()> {
         content, "feature version",
         "Force checkout should overwrite uncommitted changes"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_checkout_branch_worktree_safe_refuses_uncommitted_changes() -> Result<()> {
+    // checkout_branch_worktree_safe should refuse to checkout if there are uncommitted changes
+    let dir = tempdir()?;
+    let _repo = init_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
+    let gateway = GitGateway::from_path(dir.path())?;
+
+    // Create a file on main
+    std::fs::write(dir.path().join("file.txt"), "original")?;
+    gateway.stage_all()?;
+    gateway.commit("Add file")?;
+
+    // Create feature branch
+    gateway.create_branch("feature")?;
+    gateway.checkout_branch("main")?;
+
+    // Make uncommitted changes on main
+    std::fs::write(dir.path().join("file.txt"), "uncommitted changes")?;
+
+    // Safe checkout should refuse
+    let result = gateway.checkout_branch_worktree_safe("feature");
+    assert!(result.is_err(), "Should fail with uncommitted changes");
+
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("uncommitted changes"),
+        "Error should mention uncommitted changes: {}",
+        err
+    );
+
+    // Should still be on main
+    assert_eq!(gateway.get_current_branch_name()?, "main");
+
+    // Uncommitted changes should be preserved
+    let content = std::fs::read_to_string(dir.path().join("file.txt"))?;
+    assert_eq!(content, "uncommitted changes");
+
+    Ok(())
+}
+
+// NOTE: Worktree conflict testing is handled in src/worktree.rs tests
+// Testing it here causes process-wide current directory conflicts in parallel test execution
+// The worktree.rs tests use proper DirGuard and #[serial] coordination
+
+#[test]
+fn test_checkout_branch_worktree_safe_succeeds_when_safe() -> Result<()> {
+    // checkout_branch_worktree_safe should succeed when there are no uncommitted changes
+    // and no worktree conflicts
+    let dir = tempdir()?;
+    let _repo = init_repo(dir.path())?;
+    let _ctx = TestRepoContext::new(dir.path());
+    let gateway = GitGateway::from_path(dir.path())?;
+
+    // Create a file on main
+    std::fs::write(dir.path().join("file.txt"), "original")?;
+    gateway.stage_all()?;
+    gateway.commit("Add file")?;
+
+    // Create feature branch
+    gateway.create_branch("feature")?;
+    gateway.checkout_branch("main")?;
+
+    // No uncommitted changes, no worktree conflicts - should succeed
+    gateway.checkout_branch_worktree_safe("feature")?;
+
+    // Should be on feature now
+    assert_eq!(gateway.get_current_branch_name()?, "feature");
 
     Ok(())
 }

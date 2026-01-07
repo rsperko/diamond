@@ -31,7 +31,7 @@ pub fn run() -> Result<()> {
     if bottom == current {
         println!("{} Already at stack bottom", "✓".green().bold());
     } else {
-        gateway.checkout_branch_safe(&bottom)?;
+        gateway.checkout_branch_worktree_safe(&bottom)?;
         println!("{} Jumped to bottom: {}", "✓".green().bold(), bottom.green());
     }
 
@@ -166,5 +166,51 @@ mod tests {
         // Should succeed (already at bottom since it's trunk)
         let result = run();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_bottom_with_uncommitted_changes_fails() {
+        let dir = tempdir().unwrap();
+        let repo = init_test_repo(dir.path()).unwrap();
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new().unwrap();
+        let ref_store = RefStore::new().unwrap();
+
+        // Create and commit a tracked file on main
+        std::fs::write(dir.path().join("tracked.txt"), "original").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("tracked.txt")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Add tracked file", &tree, &[&parent])
+            .unwrap();
+
+        // Set up stack: main -> middle -> top
+        ref_store.set_trunk("main").unwrap();
+        gateway.create_branch("middle").unwrap();
+        ref_store.set_parent("middle", "main").unwrap();
+        gateway.create_branch("top").unwrap();
+        ref_store.set_parent("top", "middle").unwrap();
+
+        // Modify the tracked file without committing (on top branch)
+        std::fs::write(dir.path().join("tracked.txt"), "modified").unwrap();
+
+        // Try to navigate to bottom - should fail with uncommitted changes
+        let result = run();
+        assert!(result.is_err(), "dm bottom should fail with uncommitted changes");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("uncommitted changes"),
+            "Error should mention uncommitted changes: {}",
+            err_msg
+        );
+
+        // Should still be on top
+        assert_eq!(gateway.get_current_branch_name().unwrap(), "top");
     }
 }

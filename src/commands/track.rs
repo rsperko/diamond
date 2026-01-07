@@ -261,7 +261,7 @@ mod tests {
 
         // Create and checkout a feature branch
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("feature")?;
+        gateway.checkout_branch_worktree_safe("feature")?;
 
         // Track without parent - should default to trunk
         run_track(None, None)?;
@@ -290,7 +290,7 @@ mod tests {
         gateway.create_branch("feature-2")?;
         ref_store.set_parent("feature-1", "main")?; // Track feature-1 first
 
-        gateway.checkout_branch("feature-2")?;
+        gateway.checkout_branch_worktree_safe("feature-2")?;
 
         // Track with explicit parent (not trunk)
         run_track(None, Some("feature-1".to_string()))?;
@@ -343,7 +343,7 @@ mod tests {
         // Delete the main branch from git (but trunk is still configured)
         // Note: We can't delete current branch, so create and switch to feature first
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("feature")?;
+        gateway.checkout_branch_worktree_safe("feature")?;
 
         // Now delete main branch
         let mut main_branch = repo.find_branch("main", git2::BranchType::Local)?;

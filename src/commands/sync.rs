@@ -40,7 +40,14 @@ impl SyncOutcome {
 }
 
 /// Sync stacks by rebasing onto updated trunk (default: restack after sync)
-pub async fn run(continue_sync: bool, abort: bool, force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
+pub async fn run(
+    continue_sync: bool,
+    abort: bool,
+    force: bool,
+    no_cleanup: bool,
+    restack: bool,
+    verbose: bool,
+) -> Result<()> {
     // Handle abort
     if abort {
         return handle_abort();
@@ -70,7 +77,7 @@ pub async fn run(continue_sync: bool, abort: bool, force: bool, no_cleanup: bool
     let _lock = acquire_operation_lock()?;
 
     // Start fresh sync
-    run_sync(force, no_cleanup, restack).await
+    run_sync(force, no_cleanup, restack, verbose).await
 }
 
 /// Handle dm sync --abort (delegates to general abort logic)
@@ -105,7 +112,7 @@ fn handle_abort() -> Result<()> {
     }
 
     // Return to original branch
-    gateway.checkout_branch(&state.original_branch)?;
+    gateway.checkout_branch_worktree_safe(&state.original_branch)?;
 
     // Clear operation state
     OperationState::clear()?;
@@ -156,7 +163,7 @@ fn handle_continue() -> Result<bool> {
     // Continue with remaining branches
     // Note: no_cleanup=true because cleanup was already handled (or skipped) in initial sync
     let ref_store = RefStore::new()?;
-    let outcome = continue_sync_from_state(&mut state, &ref_store, true)?;
+    let outcome = continue_sync_from_state(&mut state, &ref_store, true, false)?;
     Ok(outcome.any_work_done())
 }
 
@@ -203,7 +210,7 @@ fn run_sync_dry_run(ref_store: &RefStore) -> Result<()> {
 }
 
 /// Start a fresh sync operation
-async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
+async fn run_sync(force: bool, no_cleanup: bool, restack: bool, verbose: bool) -> Result<()> {
     let gateway = GitGateway::new()?;
 
     // Check for staged or modified changes (allow untracked files)
@@ -274,7 +281,7 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
 
     if roots.is_empty() {
         ui::success_bold("No branches to sync");
-        gateway.checkout_branch(&original_branch)?;
+        gateway.checkout_branch_worktree_safe(&original_branch)?;
         return Ok(());
     }
 
@@ -310,22 +317,53 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
                 } else {
                     let merged_prs = find_merged_prs_async(forge.as_ref(), &branches_to_rebase).await;
                     if !merged_prs.is_empty() {
-                        ui::step(&format!("Cleaning up {} merged PR(s):", merged_prs.len()));
-                        let deleted = cleanup_merged_branches_for_sync_async(
-                            &gateway,
-                            &ref_store,
-                            &mut cache,
-                            &trunk,
-                            &merged_prs,
-                            Some(forge.as_ref()),
-                        )
-                        .await?;
+                        // Prompt for which branches to delete (batch selection)
+                        // Unless --force is set, in which case delete all
+                        let branches_to_delete = if force {
+                            // Force mode: delete all merged branches without prompting
+                            merged_prs.iter().map(|(branch, _)| branch.clone()).collect::<Vec<_>>()
+                        } else {
+                            // Interactive mode: prompt user for batch selection
+                            match ui::select_branches_for_cleanup(&merged_prs) {
+                                Ok(selected) => selected,
+                                Err(_) => {
+                                    // Non-TTY environment - bail with helpful error
+                                    anyhow::bail!(
+                                        "Found {} merged PR(s) but cannot prompt in non-interactive mode.\n\
+                                        Use --force to automatically delete all merged branches.",
+                                        merged_prs.len()
+                                    );
+                                }
+                            }
+                        };
 
-                        // Recalculate branches to rebase after cleanup
-                        if !deleted.is_empty() {
-                            // Remove deleted branches from the list
-                            branches_to_rebase.retain(|b| !deleted.contains(b));
-                            println!();
+                        // If user chose to delete some branches, proceed with cleanup
+                        if !branches_to_delete.is_empty() {
+                            // Filter merged_prs to only include selected branches
+                            let filtered_prs: Vec<(String, crate::forge::PrInfo)> = merged_prs
+                                .into_iter()
+                                .filter(|(branch, _)| branches_to_delete.contains(branch))
+                                .collect();
+
+                            ui::step(&format!("Cleaning up {} merged PR(s):", filtered_prs.len()));
+                            let deleted = cleanup_merged_branches_for_sync_async(
+                                &gateway,
+                                &ref_store,
+                                &mut cache,
+                                &trunk,
+                                &filtered_prs,
+                                Some(forge.as_ref()),
+                            )
+                            .await?;
+
+                            // Recalculate branches to rebase after cleanup
+                            if !deleted.is_empty() {
+                                // Remove deleted branches from the list
+                                branches_to_rebase.retain(|b| !deleted.contains(b));
+                                println!();
+                            }
+                        } else {
+                            ui::step("Skipped cleanup (no branches selected)");
                         }
                     }
                 }
@@ -341,13 +379,13 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
         ui::success_bold("Sync complete! All branches were merged.");
         // Return to original branch if it still exists, otherwise stay on trunk
         if gateway.branch_exists(&original_branch)? {
-            gateway.checkout_branch(&original_branch)?;
+            gateway.checkout_branch_worktree_safe(&original_branch)?;
         } else {
             ui::step(&format!(
                 "Original branch '{}' was merged, staying on {}",
                 original_branch, trunk
             ));
-            gateway.checkout_branch(&trunk)?;
+            gateway.checkout_branch_worktree_safe(&trunk)?;
         }
         return Ok(());
     }
@@ -357,13 +395,13 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
         ui::success_bold("Sync complete (cleanup only)");
         // Return to original branch if it still exists, otherwise stay on trunk
         if gateway.branch_exists(&original_branch)? {
-            gateway.checkout_branch(&original_branch)?;
+            gateway.checkout_branch_worktree_safe(&original_branch)?;
         } else {
             ui::step(&format!(
                 "Original branch '{}' was deleted, staying on {}",
                 original_branch, trunk
             ));
-            gateway.checkout_branch(&trunk)?;
+            gateway.checkout_branch_worktree_safe(&trunk)?;
         }
         return Ok(());
     }
@@ -407,7 +445,7 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool) -> Result<()> {
     state.save()?;
 
     // Start rebasing - returns outcome tracking what was done
-    let outcome = continue_sync_from_state(&mut state, &ref_store, no_cleanup)?;
+    let outcome = continue_sync_from_state(&mut state, &ref_store, no_cleanup, verbose)?;
 
     // Log sync completion
     recorder.record(Operation::SyncCompleted {
@@ -434,6 +472,7 @@ pub fn continue_sync_from_state(
     state: &mut OperationState,
     ref_store: &RefStore,
     _no_cleanup: bool,
+    verbose: bool,
 ) -> Result<SyncOutcome> {
     let gateway = GitGateway::new()?;
     let mut cache = Cache::load().unwrap_or_default();
@@ -472,7 +511,33 @@ pub fn continue_sync_from_state(
 
         // Check if branch is already rebased onto target
         if gateway.is_branch_based_on(&branch, &onto)? {
-            outcome.already_in_sync.push(branch);
+            outcome.already_in_sync.push(branch.clone());
+
+            // Only show "already in sync" messages in verbose mode
+            if verbose {
+                // Build PR display with clickable link if available
+                let pr_display = if let Some(pr_url) = cache.get_pr_url(&branch) {
+                    if let Some(num_str) = pr_url.rsplit('/').next() {
+                        if let Ok(num) = num_str.parse::<u64>() {
+                            format!(" ({})", ui::hyperlink(pr_url, &format!("PR #{}", num)))
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+
+                println!(
+                    "  [{}/{}] {}{} already up to date",
+                    processed,
+                    total,
+                    ui::print_branch(&branch),
+                    pr_display
+                );
+            }
             continue;
         }
 
@@ -502,17 +567,17 @@ pub fn continue_sync_from_state(
                 // User needs to resolve this to continue working on their stack
                 ui::spinner_error(spin, &format!("Conflicts in {}", branch));
                 ui::blank();
-                ui::warning(&format!("Conflicts detected while rebasing '{}'", branch));
-                println!();
-                println!("Resolve the conflicts, then run:");
-                println!(
-                    "  {} to continue syncing",
-                    ui::print_cmd(&format!("{} continue", program_name()))
-                );
-                println!(
-                    "  {} to abort the sync",
-                    ui::print_cmd(&format!("{} abort", program_name()))
-                );
+
+                // Show rich conflict message with stack context and conflicted files
+                ui::display_conflict_message(
+                    &branch,
+                    &onto,
+                    &state.remaining_branches,
+                    ref_store,
+                    &gateway,
+                    false, // initial conflict
+                )?;
+
                 outcome.conflict_branch = Some(branch);
                 return Ok(outcome);
             } else {
@@ -542,7 +607,24 @@ pub fn continue_sync_from_state(
             }
         }
 
-        ui::spinner_success(spin, &format!("Rebased {}", branch));
+        // Build success message with clickable PR link if available
+        let pr_display = if let Some(pr_url) = cache.get_pr_url(&branch) {
+            // Extract PR number from URL (e.g., "https://github.com/owner/repo/pull/123" -> "123")
+            if let Some(num_str) = pr_url.rsplit('/').next() {
+                if let Ok(num) = num_str.parse::<u64>() {
+                    // Create clickable hyperlink (OSC 8) - invisible in unsupported terminals
+                    format!(" ({})", ui::hyperlink(pr_url, &format!("PR #{}", num)))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        ui::spinner_success(spin, &format!("Rebased {}{}", branch, pr_display));
         outcome.rebased.push(branch.clone());
 
         // Update base_sha after successful rebase
@@ -558,13 +640,13 @@ pub fn continue_sync_from_state(
     // Return to original branch if it still exists, otherwise stay on trunk
     let trunk = ref_store.require_trunk()?;
     if gateway.branch_exists(&state.original_branch)? {
-        gateway.checkout_branch(&state.original_branch)?;
+        gateway.checkout_branch_worktree_safe(&state.original_branch)?;
     } else {
         ui::step(&format!(
             "Original branch '{}' was merged, staying on {}",
             state.original_branch, trunk
         ));
-        gateway.checkout_branch(&trunk)?;
+        gateway.checkout_branch_worktree_safe(&trunk)?;
     }
 
     // Record sync timestamp for staleness tracking
@@ -583,6 +665,11 @@ pub fn continue_sync_from_state(
             outcome.rebased.len(),
             if outcome.rebased.len() == 1 { "" } else { "es" }
         ));
+
+        // Show "already in sync" count if not verbose
+        if !verbose && !outcome.already_in_sync.is_empty() {
+            println!("  • {} already up to date", outcome.already_in_sync.len());
+        }
     } else {
         ui::success(&format!(
             "{} branch{} already in sync",
@@ -591,7 +678,12 @@ pub fn continue_sync_from_state(
         ));
     }
 
-    // Show skipped branches if any
+    // Suggest --verbose if there were branches that didn't need updating
+    if !verbose && !outcome.already_in_sync.is_empty() && outcome.any_work_done() {
+        ui::step("Use --verbose (-v) to see all branch details");
+    }
+
+    // Show skipped branches if any (grouped by stack)
     if !outcome.skipped_branches.is_empty() {
         ui::blank();
         ui::warning(&format!(
@@ -599,14 +691,53 @@ pub fn continue_sync_from_state(
             outcome.skipped_branches.len(),
             if outcome.skipped_branches.len() == 1 { "" } else { "es" }
         ));
+
+        // Group branches by their position in the stack
+        // This helps users understand dependencies and what to fix first
+        let mut displayed = std::collections::HashSet::new();
+
         for (branch, reason) in &outcome.skipped_branches {
-            println!("  • {} ({})", branch.yellow(), reason);
+            if displayed.contains(branch) {
+                continue;
+            }
+
+            // Check if this branch has children that were also skipped
+            let children: Vec<String> = ref_store
+                .get_children(branch)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|child| outcome.skipped_branches.iter().any(|(b, _)| b == child))
+                .collect();
+
+            // Display the branch with its reason
+            let reason_display = if reason.contains("conflicts") {
+                format!("{}", reason.red())
+            } else {
+                format!("{}", reason.yellow())
+            };
+            println!("  • {} ({})", branch.yellow(), reason_display);
+            displayed.insert(branch.clone());
+
+            // Display children that were blocked by this parent
+            for child in children {
+                let child_reason = outcome
+                    .skipped_branches
+                    .iter()
+                    .find(|(b, _)| b == &child)
+                    .map(|(_, r)| r.as_str())
+                    .unwrap_or("blocked by parent");
+
+                println!("    └─ {} ({})", child.bright_black(), child_reason.bright_black());
+                displayed.insert(child);
+            }
         }
+
         ui::blank();
+        println!("Fix conflicts starting from the top of each stack, then run:");
         println!(
-            "Run '{} checkout <branch> && {} restack' when ready to resolve conflicts.",
-            program_name(),
-            program_name()
+            "  {} checkout <branch> && {} restack --continue",
+            ui::print_cmd(program_name()),
+            ui::print_cmd(program_name())
         );
     }
 
@@ -754,7 +885,7 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // No trunk configured (RefStore is empty)
-        let result = run(false, false, false, true, false).await; // restack=false for tests
+        let result = run(false, false, false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -773,7 +904,7 @@ mod tests {
         // No operation in progress
         OperationState::clear().ok();
 
-        let result = run(false, true, false, true, false).await; // restack=false for tests
+        let result = run(false, true, false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No operation in progress"));
     }
@@ -787,7 +918,7 @@ mod tests {
         // No operation in progress
         OperationState::clear().ok();
 
-        let result = run(true, false, false, true, false).await; // restack=false for tests
+        let result = run(true, false, false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No operation in progress"));
     }
@@ -890,7 +1021,7 @@ mod tests {
         let state = OperationState::new_restack("main".to_string(), vec!["feature-1".to_string()]);
         state.save().unwrap();
 
-        let result = run(false, true, false, true, false).await; // restack=false for tests
+        let result = run(false, true, false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -913,7 +1044,7 @@ mod tests {
         );
         state.save().unwrap();
 
-        let result = run(true, false, false, true, false).await; // restack=false for tests
+        let result = run(true, false, false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -938,7 +1069,7 @@ mod tests {
         ref_store.set_parent("missing-branch", "feature-1").unwrap();
 
         // Try to sync - should auto-clean the stale ref for missing-branch
-        let result = run_sync(false, true, false).await; // restack=false for tests
+        let result = run_sync(false, true, false, false).await; // restack=false, verbose=false for tests
         assert!(result.is_ok(), "Sync should succeed after cleaning up stale refs");
 
         // Verify the stale ref was cleaned up
@@ -1057,7 +1188,7 @@ mod tests {
         let mut state = OperationState::new_sync("main".to_string(), vec!["feature-1".to_string()]);
 
         // Run continue_sync - outcome should show no work done because feature-1 is already based on main
-        let outcome = continue_sync_from_state(&mut state, &ref_store, true).unwrap();
+        let outcome = continue_sync_from_state(&mut state, &ref_store, true, false).unwrap();
         assert!(
             !outcome.any_work_done(),
             "Expected no work done when branch is already rebased"
@@ -1103,7 +1234,7 @@ mod tests {
         assert_eq!(state.all_branches.len(), 3);
 
         // Process branches (they're already based correctly, so no rebase needed)
-        let outcome = continue_sync_from_state(&mut state, &ref_store, true).unwrap();
+        let outcome = continue_sync_from_state(&mut state, &ref_store, true, false).unwrap();
 
         // After processing, remaining_branches should be empty
         assert!(
@@ -1201,7 +1332,7 @@ mod tests {
         );
 
         // Process (will complete since branch is already based correctly)
-        let _ = continue_sync_from_state(&mut state, &ref_store, true).unwrap();
+        let _ = continue_sync_from_state(&mut state, &ref_store, true, false).unwrap();
 
         // State should be cleared after successful completion
         assert!(

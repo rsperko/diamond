@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 
+use crate::platform::DisplayPath;
 use super::verbose_cmd;
 use super::GitGateway;
 
@@ -38,12 +39,11 @@ impl GitGateway {
         self.backend.checkout_branch_force(name)
     }
 
-    /// Checkout a branch safely (user-initiated)
-    /// Fails if there are uncommitted changes that would conflict with the checkout
-    /// This is the safe mode for user-initiated checkout commands
-    pub fn checkout_branch_safe(&self, name: &str) -> Result<()> {
-        // Check for uncommitted changes BEFORE attempting checkout
-        // This mimics git's behavior of refusing to checkout if it would lose data
+    /// Checkout a branch with full safety checks
+    /// Fails if there are uncommitted changes OR if the branch is checked out in another worktree
+    /// This is the safest checkout mode for user-initiated commands
+    pub fn checkout_branch_worktree_safe(&self, name: &str) -> Result<()> {
+        // Check for uncommitted changes FIRST (most common case)
         if self.has_staged_or_modified_changes()? {
             bail!(
                 "Cannot checkout '{}' - you have uncommitted changes.\n\
@@ -53,30 +53,20 @@ impl GitGateway {
                 name
             );
         }
-        // Safe to proceed with checkout
-        verbose_cmd("checkout", &[name]);
-        self.backend.checkout_branch(name)
-    }
 
-    /// Checkout a branch with worktree safety check
-    /// Fails if the branch is checked out in another worktree
-    /// This is used by rebase operations to give a clear error message
-    pub fn checkout_branch_worktree_safe(&self, name: &str) -> Result<()> {
         // Check if branch is in another worktree
-        if crate::worktree::is_branch_in_other_worktree(name)? {
+        if let Some(worktree_path) = crate::worktree::get_worktree_path_for_branch(name)? {
             bail!(
-                "Cannot checkout '{}' - it is checked out in another worktree.\n\
-                 Run 'git worktree list' to see where.\n\
-                 Either:\n\
-                 1. Close the other worktree with 'git worktree remove <path>'\n\
-                 2. Switch to a different branch in that worktree\n\
-                 3. Run this command from the worktree where '{}' is checked out",
+                "Branch '{}' is already checked out at:\n  \
+                 {}",
                 name,
-                name
+                DisplayPath(&worktree_path)
             );
         }
 
-        self.checkout_branch(name)
+        // Safe to proceed with checkout
+        verbose_cmd("checkout", &[name]);
+        self.backend.checkout_branch(name)
     }
 
     /// List all local branch names

@@ -796,7 +796,7 @@ fn test_validate_stack_integrity_fails_for_unrebased_branch() -> Result<()> {
     drop(child_branch);
 
     // Checkout child and make a commit
-    gateway.checkout_branch("child")?;
+    gateway.checkout_branch_worktree_safe("child")?;
     std::fs::write(dir.path().join("child.txt"), "child content")?;
     gateway.stage_all()?;
     gateway.commit("Child commit")?;
@@ -1567,7 +1567,7 @@ fn test_submit_publish_marks_existing_pr_as_ready() -> Result<()> {
     // Create branch with parent tracking
     let gateway = GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -1621,7 +1621,7 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_existing_pr() -> Result<(
     // Create branch with parent tracking
     let gateway = GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -1679,7 +1679,7 @@ fn test_submit_merge_when_ready_enables_auto_merge_for_new_pr() -> Result<()> {
     // Create branch with parent tracking
     let gateway = GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -1741,7 +1741,7 @@ fn test_submit_without_publish_does_not_mark_ready() -> Result<()> {
     // Create branch with parent tracking
     let gateway = GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -1797,7 +1797,7 @@ fn test_submit_without_merge_when_ready_does_not_enable_auto_merge() -> Result<(
     // Create branch with parent tracking
     let gateway = GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     let ref_store = RefStore::new()?;
     ref_store.set_trunk("main")?;
@@ -2267,13 +2267,13 @@ fn test_diverged_ancestors_are_pushed_before_leaf() -> Result<()> {
         .output()?;
 
     // Now amend branch-a to cause divergence
-    gateway.checkout_branch("branch-a")?;
+    gateway.checkout_branch_worktree_safe("branch-a")?;
     std::fs::write(local_dir.path().join("a.txt"), "amended content a")?;
     gateway.stage_all()?;
     gateway.amend_commit(None)?;
 
     // Rebase branch-b onto the amended branch-a
-    gateway.checkout_branch("branch-b")?;
+    gateway.checkout_branch_worktree_safe("branch-b")?;
     std::process::Command::new("git")
         .args(["rebase", "branch-a"])
         .current_dir(local_dir.path())
@@ -2379,13 +2379,13 @@ fn test_diverged_ancestor_without_pr_not_pushed() -> Result<()> {
         .output()?;
 
     // Amend branch-a to cause divergence
-    gateway.checkout_branch("branch-a")?;
+    gateway.checkout_branch_worktree_safe("branch-a")?;
     std::fs::write(local_dir.path().join("a.txt"), "amended")?;
     gateway.stage_all()?;
     gateway.amend_commit(None)?;
 
     // Rebase branch-b
-    gateway.checkout_branch("branch-b")?;
+    gateway.checkout_branch_worktree_safe("branch-b")?;
     std::process::Command::new("git")
         .args(["rebase", "branch-a"])
         .current_dir(local_dir.path())
@@ -2590,19 +2590,19 @@ fn test_multiple_diverged_ancestors_pushed_in_order() -> Result<()> {
         .output()?;
 
     // Now amend branch-a (causes divergence)
-    gateway.checkout_branch("branch-a")?;
+    gateway.checkout_branch_worktree_safe("branch-a")?;
     std::fs::write(local_dir.path().join("a.txt"), "amended a")?;
     gateway.stage_all()?;
     gateway.amend_commit(None)?;
 
     // Amend branch-b (causes divergence)
-    gateway.checkout_branch("branch-b")?;
+    gateway.checkout_branch_worktree_safe("branch-b")?;
     std::fs::write(local_dir.path().join("b.txt"), "amended b")?;
     gateway.stage_all()?;
     gateway.amend_commit(None)?;
 
     // Return to branch-c (don't amend it - we're testing ancestor push)
-    gateway.checkout_branch("branch-c")?;
+    gateway.checkout_branch_worktree_safe("branch-c")?;
 
     // Fetch to update remote tracking refs
     std::process::Command::new("git")
@@ -2684,7 +2684,7 @@ fn test_pr_title_uses_commit_message_not_branch_name() -> Result<()> {
 
     // Create branch with date-prefixed name
     gateway.create_branch("01-04-add-fastlane-support")?;
-    gateway.checkout_branch("01-04-add-fastlane-support")?;
+    gateway.checkout_branch_worktree_safe("01-04-add-fastlane-support")?;
 
     // Make a commit with a nice title
     std::fs::write(dir.path().join("file.txt"), "content")?;
@@ -2709,7 +2709,7 @@ fn test_pr_title_multiline_commit_uses_first_line() -> Result<()> {
 
     let gateway = crate::git_gateway::GitGateway::new()?;
     gateway.create_branch("feature")?;
-    gateway.checkout_branch("feature")?;
+    gateway.checkout_branch_worktree_safe("feature")?;
 
     std::fs::write(dir.path().join("file.txt"), "content")?;
     gateway.stage_all()?;

@@ -56,7 +56,7 @@ pub fn run(steps: usize, to: Option<String>) -> Result<()> {
         let child = children[0];
 
         // Checkout child safely (fail if uncommitted changes)
-        gateway.checkout_branch_safe(child)?;
+        gateway.checkout_branch_worktree_safe(child)?;
 
         if steps == 1 {
             if children.len() > 1 {
@@ -88,7 +88,7 @@ fn navigate_to_branch(gateway: &GitGateway, ref_store: &RefStore, from: &str, ta
     }
 
     // Checkout the target branch safely (fail if uncommitted changes)
-    gateway.checkout_branch_safe(target)?;
+    gateway.checkout_branch_worktree_safe(target)?;
     println!("Switched to descendant branch: {}", target);
 
     Ok(())
@@ -136,7 +136,7 @@ mod tests {
         gateway.create_branch("feature")?;
 
         // Go back to main
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs: main -> feature
         ref_store.set_trunk("main")?;
@@ -160,11 +160,11 @@ mod tests {
 
         // Create branches in git (in reverse alphabetical order)
         gateway.create_branch("zebra")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         gateway.create_branch("apple")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         gateway.create_branch("middle")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs: main -> apple, middle, zebra
         ref_store.set_trunk("main")?;
@@ -246,7 +246,7 @@ mod tests {
         gateway.create_branch("level3")?;
 
         // Go back to main
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs: main -> level1 -> level2 -> level3
         ref_store.set_trunk("main")?;
@@ -288,7 +288,7 @@ mod tests {
         gateway.create_branch("level3")?;
 
         // Go back to main
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs: main -> level1 -> level2 -> level3
         ref_store.set_trunk("main")?;
@@ -316,7 +316,7 @@ mod tests {
 
         // Create feature branch
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         // Set up refs: main -> feature
         ref_store.set_trunk("main")?;
@@ -340,7 +340,7 @@ mod tests {
         let ref_store = RefStore::new()?;
 
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         ref_store.set_trunk("main")?;
         ref_store.set_parent("feature", "main")?;
@@ -365,7 +365,7 @@ mod tests {
         gateway.create_branch("level1")?;
         gateway.create_branch("level2")?;
         gateway.create_branch("level3")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         ref_store.set_trunk("main")?;
         ref_store.set_parent("level1", "main")?;
@@ -389,7 +389,7 @@ mod tests {
         let ref_store = RefStore::new()?;
 
         gateway.create_branch("level1")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
 
         ref_store.set_trunk("main")?;
         ref_store.set_parent("level1", "main")?;
@@ -418,9 +418,9 @@ mod tests {
 
         // Create two separate stacks: main -> stack1, main -> stack2
         gateway.create_branch("stack1")?;
-        gateway.checkout_branch("main")?;
+        gateway.checkout_branch_worktree_safe("main")?;
         gateway.create_branch("stack2")?;
-        gateway.checkout_branch("stack1")?;
+        gateway.checkout_branch_worktree_safe("stack1")?;
 
         ref_store.set_trunk("main")?;
         ref_store.set_parent("stack1", "main")?;

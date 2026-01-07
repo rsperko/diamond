@@ -29,6 +29,7 @@ mod diamond_refs;
 mod rebase;
 pub mod refs;
 mod remote;
+mod status;
 mod validation;
 
 #[cfg(test)]
@@ -50,6 +51,8 @@ pub use refs::RefFormat;
 pub use self::backup::BackupRef;
 pub use self::rebase::RebaseOutcome;
 pub use self::remote::{BranchSyncState, SyncBranchResult};
+#[allow(unused_imports)] // Used in ui::conflict module
+pub use self::status::{ConflictType, ConflictedFile};
 
 /// Default remote name when config cannot be loaded
 const DEFAULT_REMOTE: &str = "origin";

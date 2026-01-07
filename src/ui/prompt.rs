@@ -7,6 +7,7 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, MultiSelect, Select};
 use std::io::IsTerminal;
 
+use crate::forge::PrInfo;
 use crate::program_name::program_name;
 
 // ──────────────────────────────────────────────────────────────
@@ -109,6 +110,95 @@ pub fn multi_select<T: std::fmt::Display>(message: &str, items: &[T]) -> Result<
         .interact()?;
 
     Ok(selections)
+}
+
+/// Batch selection for cleaning up merged branches.
+///
+/// Shows all merged branches with PR info and prompts user to:
+/// 1. Delete all
+/// 2. Keep all
+/// 3. Select individually (launches multi-select TUI)
+///
+/// Returns the list of branch names to delete.
+/// Errors in non-TTY mode (caller should handle with --force flag).
+///
+/// # Example
+/// ```ignore
+/// let merged_prs = vec![
+///     ("branch-1".to_string(), pr_info_1),
+///     ("branch-2".to_string(), pr_info_2),
+/// ];
+/// let to_delete = ui::select_branches_for_cleanup(&merged_prs)?;
+/// ```
+pub fn select_branches_for_cleanup(merged_prs: &[(String, PrInfo)]) -> Result<Vec<String>> {
+    // Handle empty list first - no TTY needed
+    if merged_prs.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if !std::io::stdin().is_terminal() {
+        bail!("This operation requires confirmation. Use --force to skip in non-interactive mode.");
+    }
+
+    // Show all merged branches with PR info (clickable links)
+    println!("\n{} {} merged PR(s):", "→".bright_blue(), merged_prs.len());
+    for (branch, pr_info) in merged_prs {
+        let state_str = match pr_info.state {
+            crate::forge::PrState::Merged => "merged".green(),
+            crate::forge::PrState::Closed => "closed".red(),
+            crate::forge::PrState::Open => "open".yellow(),
+        };
+        // Create clickable PR link
+        let pr_link = crate::ui::hyperlink(&pr_info.url, &format!("PR #{}", pr_info.number));
+        println!("  • {} ({} {})", branch.cyan(), pr_link, state_str);
+    }
+    println!();
+
+    // Prompt for action
+    let options = vec!["Delete all", "Keep all", "Select individually"];
+    let choice = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("What would you like to do?")
+        .items(&options)
+        .default(1) // Default to "Keep all" (safe option)
+        .interact()?;
+
+    match choice {
+        0 => {
+            // Delete all
+            Ok(merged_prs.iter().map(|(branch, _)| branch.clone()).collect())
+        }
+        1 => {
+            // Keep all
+            Ok(vec![])
+        }
+        2 => {
+            // Select individually
+            let display_items: Vec<String> = merged_prs
+                .iter()
+                .map(|(branch, pr_info)| {
+                    let state_str = match pr_info.state {
+                        crate::forge::PrState::Merged => "merged",
+                        crate::forge::PrState::Closed => "closed",
+                        crate::forge::PrState::Open => "open",
+                    };
+                    format!("{} (PR #{} {})", branch, pr_info.number, state_str)
+                })
+                .collect();
+
+            let selected_indices = MultiSelect::with_theme(&ColorfulTheme::default())
+                .with_prompt("Select branches to delete (Space to toggle, Enter to confirm)")
+                .items(&display_items)
+                .interact()?;
+
+            let selected_branches: Vec<String> = selected_indices
+                .into_iter()
+                .map(|idx| merged_prs[idx].0.clone())
+                .collect();
+
+            Ok(selected_branches)
+        }
+        _ => unreachable!(),
+    }
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -240,5 +330,48 @@ mod tests {
     fn test_yes_no_errors_in_non_tty() {
         let result = yes_no("Continue?", false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_select_branches_for_cleanup_errors_in_non_tty() {
+        // Create test data
+        let merged_prs = vec![
+            (
+                "feature-1".to_string(),
+                PrInfo {
+                    number: 123,
+                    url: "https://github.com/user/repo/pull/123".to_string(),
+                    head_ref: "feature-1".to_string(),
+                    base_ref: "main".to_string(),
+                    state: crate::forge::PrState::Merged,
+                    title: "Add feature 1".to_string(),
+                },
+            ),
+            (
+                "feature-2".to_string(),
+                PrInfo {
+                    number: 124,
+                    url: "https://github.com/user/repo/pull/124".to_string(),
+                    head_ref: "feature-2".to_string(),
+                    base_ref: "main".to_string(),
+                    state: crate::forge::PrState::Closed,
+                    title: "Add feature 2".to_string(),
+                },
+            ),
+        ];
+
+        // In non-TTY environment, should error with --force suggestion
+        let result = select_branches_for_cleanup(&merged_prs);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("--force"));
+    }
+
+    #[test]
+    fn test_select_branches_for_cleanup_empty_list() {
+        // Empty list should return empty vec without prompting
+        let merged_prs: Vec<(String, PrInfo)> = vec![];
+        let result = select_branches_for_cleanup(&merged_prs);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Vec::<String>::new());
     }
 }

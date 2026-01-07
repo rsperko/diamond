@@ -3,6 +3,7 @@
 //! Provides CLI interface for viewing and modifying Diamond configuration.
 
 use crate::config::{BranchConfig, Config, LocalConfig, MergeConfig, RepoConfig, UserConfig};
+use crate::platform::DisplayPath;
 use anyhow::Result;
 use colored::Colorize;
 
@@ -53,21 +54,21 @@ pub fn show() -> Result<()> {
     if let Ok(repo_path) = Config::repo_config_path() {
         let exists = repo_path.exists();
         let status = if exists { "exists".green() } else { "not found".dimmed() };
-        println!("  repo:  {} ({})", repo_path.display(), status);
+        println!("  repo:  {} ({})", DisplayPath(&repo_path), status);
     }
 
     // Show user config path
     if let Ok(user_path) = Config::user_config_path() {
         let exists = user_path.exists();
         let status = if exists { "exists".green() } else { "not found".dimmed() };
-        println!("  user:  {} ({})", user_path.display(), status);
+        println!("  user:  {} ({})", DisplayPath(&user_path), status);
     }
 
     // Show local config path
     if let Ok(local_path) = Config::local_config_path() {
         let exists = local_path.exists();
         let status = if exists { "exists".green() } else { "not found".dimmed() };
-        println!("  local: {} ({})", local_path.display(), status);
+        println!("  local: {} ({})", DisplayPath(&local_path), status);
     }
 
     Ok(())
@@ -128,7 +129,7 @@ fn set_repo_remote(value: &str) -> Result<()> {
     Config::save_repo_config(&config)?;
 
     println!("Set {} = {} in repo config", "repo.remote".green(), value.cyan());
-    println!("  {}", repo_path.display());
+    println!("  {}", DisplayPath(&repo_path));
     println!();
     println!(
         "{}",
@@ -174,7 +175,7 @@ fn set_user(key: &str, value: &str) -> Result<()> {
     Config::save_user_config(&config)?;
 
     println!("Set {} = {} in user config", key.green(), value.cyan());
-    println!("  {}", user_path.display());
+    println!("  {}", DisplayPath(&user_path));
 
     Ok(())
 }
@@ -215,7 +216,7 @@ fn set_local(key: &str, value: &str) -> Result<()> {
     Config::save_local_config(&config)?;
 
     println!("Set {} = {} in local config", key.green(), value.cyan());
-    println!("  {}", local_path.display());
+    println!("  {}", DisplayPath(&local_path));
 
     Ok(())
 }
