@@ -232,6 +232,7 @@ fn run_app(
 mod tests {
     use super::*;
     use crate::git_gateway::GitGateway;
+    use crate::platform::DisplayPath;
     use anyhow::Result;
 
     use tempfile::tempdir;
@@ -333,7 +334,7 @@ mod tests {
         let head = repo.head()?;
         let commit = head.peel_to_commit()?;
         repo.branch("feature", &commit, false)?;
-        gateway.checkout_branch("feature")?;
+        gateway.checkout_branch_worktree_safe("feature")?;
 
         // Use --trunk flag to go back to trunk
         run(None, true, false, false, false)?;
@@ -513,9 +514,12 @@ mod tests {
         );
 
         // Verify it shows the actual path (not a placeholder, no extra command needed)
+        // On Windows, paths may differ after canonicalization, so we compare canonicalized+displayed paths
+        let expected_path = format!("{}", DisplayPath(&wt_path.canonicalize()?));
         assert!(
-            err_msg.contains(wt_path.to_str().unwrap()),
-            "Error should show the actual worktree path: {}",
+            err_msg.contains(&expected_path),
+            "Error should show the actual worktree path.\nExpected to contain: {}\nActual error: {}",
+            expected_path,
             err_msg
         );
 

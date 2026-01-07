@@ -60,7 +60,7 @@ pub fn run() -> Result<()> {
     }
 
     // Checkout parent
-    gateway.checkout_branch(&parent)?;
+    gateway.checkout_branch_worktree_safe(&parent)?;
     println!("{} Checked out {}", "→".blue(), parent.green());
 
     // Delete the branch from git
@@ -194,7 +194,7 @@ mod tests {
         ref_store.set_parent("middle", "main")?;
         gateway.create_branch("leaf")?;
         ref_store.set_parent("leaf", "middle")?;
-        gateway.checkout_branch("middle")?;
+        gateway.checkout_branch_worktree_safe("middle")?;
 
         // Try to pop middle (which has child "leaf")
         let result = run();

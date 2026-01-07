@@ -2,6 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 
+use crate::platform::DisplayPath;
 use super::verbose_cmd;
 use super::GitGateway;
 
@@ -59,7 +60,7 @@ impl GitGateway {
                 "Branch '{}' is already checked out at:\n  \
                  {}",
                 name,
-                worktree_path.display()
+                DisplayPath(&worktree_path)
             );
         }
 

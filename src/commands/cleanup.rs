@@ -125,7 +125,7 @@ pub fn run(force: bool) -> Result<()> {
 
         // PHASE 2: Now safe to delete the parent branch
         // Switch to trunk first (safe mode - fail if uncommitted changes)
-        gateway.checkout_branch_safe(&trunk)?;
+        gateway.checkout_branch_worktree_safe(&trunk)?;
 
         match gateway.delete_branch(branch) {
             Ok(()) => {

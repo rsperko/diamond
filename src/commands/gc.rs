@@ -222,7 +222,7 @@ mod tests {
 
         // Create a feature branch
         gateway.create_branch("feature")?;
-        gateway.checkout_branch("feature")?;
+        gateway.checkout_branch_worktree_safe("feature")?;
 
         // Create 5 recent backups
         for i in 1..=5 {

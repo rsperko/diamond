@@ -56,6 +56,37 @@ pub fn subheader(title: &str) {
     }
 }
 
+/// Print a decorative section separator (opt-in via --decorators flag).
+///
+/// When enabled, prints: `━━━ Title ━━━`
+/// When disabled, just prints a blank line for minimal separation.
+///
+/// This is for users who want more visual structure in their output.
+/// Most users should leave this disabled (default) for cleaner output.
+///
+/// # Example
+/// ```ignore
+/// ui::decorator("Fetch", decorators_enabled);
+/// // ... fetch operations ...
+/// ui::decorator("Sync", decorators_enabled);
+/// // ... sync operations ...
+/// ```
+pub fn decorator(title: &str, enabled: bool) {
+    if !enabled {
+        // Minimal separation - just a blank line
+        println!();
+        return;
+    }
+
+    if std::io::stdout().is_terminal() {
+        // Pretty decorated separator
+        println!("{} {} {}", "━━━".bright_black(), title.bold(), "━━━".bright_black());
+    } else {
+        // Non-TTY: simple ASCII separator
+        println!("=== {} ===", title);
+    }
+}
+
 // ──────────────────────────────────────────────────────────────
 // Summary boxes
 // ──────────────────────────────────────────────────────────────
@@ -228,5 +259,12 @@ mod tests {
     fn test_step_counter() {
         step_counter(1, 5, "Processing item");
         step_counter(5, 5, "Last item");
+    }
+
+    #[test]
+    fn test_decorator() {
+        // Test both enabled and disabled modes
+        decorator("Test Section", true);
+        decorator("Test Section", false);
     }
 }

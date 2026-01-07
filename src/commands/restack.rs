@@ -10,6 +10,7 @@ use crate::operation_log::{Operation, OperationRecorder};
 use crate::program_name::program_name;
 use crate::ref_store::RefStore;
 use crate::state::{acquire_operation_lock, OperationState};
+use crate::ui;
 use crate::validation::repair_orphaned_branches;
 use crate::worktree;
 
@@ -330,6 +331,12 @@ pub fn continue_restack_from_state(state: &mut OperationState, ref_store: &RefSt
     // Re-run repair in case state changed since crash
     repair_orphaned_branches(&gateway, ref_store, &trunk)?;
 
+    // Calculate total branches for progress counter
+    // We need to track how many branches were completed before we started
+    // (in case this is a resume from conflict)
+    let total_branches = state.completed_branches.len() + state.remaining_branches.len();
+    let mut completed = state.completed_branches.len();
+
     while !state.remaining_branches.is_empty() {
         let branch = state.remaining_branches.remove(0);
         state.current_branch = Some(branch.clone());
@@ -339,11 +346,28 @@ pub fn continue_restack_from_state(state: &mut OperationState, ref_store: &RefSt
 
         // Check if branch is already rebased onto target (crash recovery)
         if gateway.is_branch_based_on(&branch, &onto)? {
-            println!("  {} {} already rebased onto {}", "✓".green(), branch, onto);
+            println!(
+                "{} [{}/{}] {} already restacked on {}",
+                "✓".green(),
+                completed + 1,
+                total_branches,
+                branch,
+                onto
+            );
+            completed += 1;
+            state.completed_branches.push(branch);
             continue;
         }
 
-        println!("{} Rebasing {} onto {}...", "→".blue(), branch.green(), onto.blue());
+        print!(
+            "{} [{}/{}] Restacking {} on {}... ",
+            "→".blue(),
+            completed + 1,
+            total_branches,
+            branch.green(),
+            onto.blue()
+        );
+        io::stdout().flush().ok();
 
         // CHECKPOINT: Save state BEFORE rebase (crash recovery)
         state.save()?;
@@ -352,20 +376,25 @@ pub fn continue_restack_from_state(state: &mut OperationState, ref_store: &RefSt
         let rebase_result = gateway.rebase_onto(&branch, &onto)?;
 
         if rebase_result.has_conflicts() {
-            // State already saved above, just inform user
+            // State already saved above, show rich conflict message
+            println!(); // End the "Restacking..." line
             println!();
-            println!("{} Conflicts detected while rebasing '{}'", "!".yellow().bold(), branch);
-            println!();
-            println!("Resolve the conflicts, then run:");
-            println!(
-                "  {} to continue restacking",
-                format!("{} continue", program_name()).cyan()
-            );
-            println!("  {} to abort the restack", format!("{} abort", program_name()).cyan());
+
+            ui::display_conflict_message(
+                &branch,
+                &onto,
+                &state.remaining_branches,
+                ref_store,
+                &gateway,
+                false, // initial conflict
+            )?;
+
             return Ok(());
         }
 
-        println!("  {} Rebased {}", "✓".green(), branch);
+        println!("{}", "✓".green());
+        completed += 1;
+        state.completed_branches.push(branch.clone());
 
         // Update base_sha after successful rebase
         cache.set_base_sha(&branch, &gateway.get_branch_sha(&branch)?);
@@ -378,7 +407,7 @@ pub fn continue_restack_from_state(state: &mut OperationState, ref_store: &RefSt
     OperationState::clear()?;
 
     // Return to original branch
-    gateway.checkout_branch(&state.original_branch)?;
+    gateway.checkout_branch_worktree_safe(&state.original_branch)?;
 
     println!();
     println!("{} Restack complete!", "✓".green().bold());
@@ -440,7 +469,7 @@ pub fn restack_children(parent_branch: &str) -> Result<()> {
 
     // Rebase each child branch onto its parent
     // We use --fork-point to correctly handle the case where the parent was amended
-    for branch in &branches_to_rebase {
+    for (idx, branch) in branches_to_rebase.iter().enumerate() {
         let onto = ref_store
             .get_parent(branch)?
             .unwrap_or_else(|| parent_branch.to_string());
@@ -449,23 +478,31 @@ pub fn restack_children(parent_branch: &str) -> Result<()> {
         // This handles the case where the parent branch has been amended
         let rebase_result = gateway.rebase_fork_point(branch, &onto)?;
         if rebase_result.has_conflicts() {
-            // Conflict - let user resolve
-            println!(
-                "\n{} Conflicts while restacking '{}'. Resolve and run '{} continue'.",
-                "!".yellow().bold(),
+            // Calculate remaining branches
+            let remaining_branches: Vec<String> = branches_to_rebase.iter().skip(idx + 1).cloned().collect();
+
+            // Show rich conflict message
+            println!();
+            ui::display_conflict_message(
                 branch,
-                program_name()
-            );
+                &onto,
+                &remaining_branches,
+                &ref_store,
+                &gateway,
+                false, // initial conflict
+            )?;
+
             // Save state for continue
             let mut state = OperationState::new_restack(parent_branch.to_string(), branches_to_rebase.clone());
             state.current_branch = Some(branch.clone());
+            state.remaining_branches = remaining_branches;
             state.save()?;
             return Ok(());
         }
     }
 
     // Return to original branch
-    gateway.checkout_branch(parent_branch)?;
+    gateway.checkout_branch_worktree_safe(parent_branch)?;
 
     Ok(())
 }

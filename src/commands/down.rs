@@ -29,7 +29,7 @@ pub fn run(steps: usize) -> Result<()> {
         })?;
 
         // Checkout parent safely (fail if uncommitted changes)
-        gateway.checkout_branch_safe(&parent)?;
+        gateway.checkout_branch_worktree_safe(&parent)?;
 
         if steps == 1 {
             println!("Switched to parent branch: {}", parent);
@@ -231,6 +231,51 @@ mod tests {
 
         // Zero steps should be a no-op
         run(0)?;
+        assert_eq!(gateway.get_current_branch_name()?, "feature");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_down_with_uncommitted_changes_fails() -> Result<()> {
+        let dir = tempdir()?;
+        let repo = init_test_repo_with_branch(dir.path(), "main")?;
+        let _ctx = TestRepoContext::new(dir.path());
+
+        let gateway = GitGateway::new()?;
+        let ref_store = RefStore::new()?;
+
+        // Create and commit a tracked file on main
+        std::fs::write(dir.path().join("tracked.txt"), "original")?;
+        let mut index = repo.index()?;
+        index.add_path(std::path::Path::new("tracked.txt"))?;
+        index.write()?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let parent = repo.head()?.peel_to_commit()?;
+        let sig = git2::Signature::now("Test", "test@test.com")?;
+        repo.commit(Some("HEAD"), &sig, &sig, "Add tracked file", &tree, &[&parent])?;
+
+        // Set up stack: main -> feature
+        ref_store.set_trunk("main")?;
+        gateway.create_branch("feature")?;
+        ref_store.set_parent("feature", "main")?;
+
+        // Modify the tracked file without committing (on feature branch)
+        std::fs::write(dir.path().join("tracked.txt"), "modified")?;
+
+        // Try to navigate down - should fail with uncommitted changes
+        let result = run(1);
+        assert!(result.is_err(), "dm down should fail with uncommitted changes");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("uncommitted changes"),
+            "Error should mention uncommitted changes: {}",
+            err_msg
+        );
+
+        // Should still be on feature
         assert_eq!(gateway.get_current_branch_name()?, "feature");
 
         Ok(())

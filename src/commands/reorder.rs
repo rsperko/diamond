@@ -276,10 +276,10 @@ fn apply_new_order(
     // Return to the original branch if it still exists
     let original_branch = gateway.get_current_branch_name()?;
     if new_order_set.contains(&original_branch) {
-        gateway.checkout_branch(&original_branch)?;
+        gateway.checkout_branch_worktree_safe(&original_branch)?;
     } else if !new_order.is_empty() {
         // Checkout the top of the new stack
-        gateway.checkout_branch(new_order.last().unwrap())?;
+        gateway.checkout_branch_worktree_safe(new_order.last().unwrap())?;
     }
 
     Ok(())

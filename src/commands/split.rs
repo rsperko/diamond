@@ -181,13 +181,13 @@ fn run_by_commit() -> Result<()> {
         if i < created_branches.len() - 1 {
             // The branch should only contain commits up to this point
             // We need to reset it to just this commit on top of parent
-            gateway.checkout_branch(branch_name)?;
+            gateway.checkout_branch_worktree_safe(branch_name)?;
             gateway.hard_reset_to(&oid_str)?;
         }
     }
 
     // Checkout back to the original (now last) branch
-    gateway.checkout_branch(&current_branch)?;
+    gateway.checkout_branch_worktree_safe(&current_branch)?;
 
     // Update children to point to the new last branch
     let last_created = &created_branches.last().unwrap().0;
@@ -308,7 +308,7 @@ fn run_by_file(patterns: Vec<String>) -> Result<()> {
     gateway.create_branch_at_ref(&new_branch_name, &parent_tip.to_string())?;
 
     // Step 2: Checkout new branch and extract matching files from current branch
-    gateway.checkout_branch(&new_branch_name)?;
+    gateway.checkout_branch_worktree_safe(&new_branch_name)?;
 
     // Get the files from current branch and add them
     for file in &matching_files {
