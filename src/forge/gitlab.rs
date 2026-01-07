@@ -9,6 +9,7 @@ use super::{
 };
 use crate::git_gateway::GitGateway;
 use anyhow::{Context, Result};
+use colored::Colorize;
 use std::process::Command;
 
 /// GitLab forge implementation
@@ -27,6 +28,10 @@ impl GitLabForge {
 
     /// Run a glab command
     fn run_glab(&self, args: &[&str]) -> Result<std::process::Output> {
+        if crate::context::ExecutionContext::is_verbose() {
+            eprintln!("  {} glab {}", "[cmd]".dimmed(), args.join(" "));
+        }
+
         let mut cmd = Command::new("glab");
 
         cmd.args(args)
@@ -422,6 +427,12 @@ impl Forge for GitLabForge {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
 
+            // Log the actual error in verbose mode for debugging
+            if crate::context::ExecutionContext::is_verbose() {
+                use colored::Colorize;
+                eprintln!("  {} {}", "[stderr]".red(), stderr.trim());
+            }
+
             // Check for common errors and provide helpful messages
             if stderr.contains("not logged") || stderr.contains("no token") {
                 anyhow::bail!("GitLab CLI not authenticated. Run 'glab auth login' first.");
@@ -435,6 +446,10 @@ impl Forge for GitLabForge {
             if stderr.contains("approval") || stderr.contains("approvals") {
                 anyhow::bail!("MR {} requires approvals that haven't been granted.", pr_ref);
             }
+            // NOTE: Additional branch protection patterns can be added here as we
+            // encounter real error messages from glab. GitLab API returns structured
+            // errors but glab CLI may not preserve that structure consistently.
+            // See: https://gitlab.com/gitlab-org/cli/-/issues/911
 
             anyhow::bail!("glab mr merge failed: {}", stderr.trim());
         }
