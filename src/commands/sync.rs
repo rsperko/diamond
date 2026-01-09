@@ -45,6 +45,7 @@ pub async fn run(
     abort: bool,
     force: bool,
     no_cleanup: bool,
+    keep: bool,
     restack: bool,
     verbose: bool,
 ) -> Result<()> {
@@ -77,7 +78,7 @@ pub async fn run(
     let _lock = acquire_operation_lock()?;
 
     // Start fresh sync
-    run_sync(force, no_cleanup, restack, verbose).await
+    run_sync(force, no_cleanup, keep, restack, verbose).await
 }
 
 /// Handle dm sync --abort (delegates to general abort logic)
@@ -210,7 +211,7 @@ fn run_sync_dry_run(ref_store: &RefStore) -> Result<()> {
 }
 
 /// Start a fresh sync operation
-async fn run_sync(force: bool, no_cleanup: bool, restack: bool, verbose: bool) -> Result<()> {
+async fn run_sync(force: bool, no_cleanup: bool, keep: bool, restack: bool, verbose: bool) -> Result<()> {
     let gateway = GitGateway::new()?;
 
     // Check for staged or modified changes (allow untracked files)
@@ -306,7 +307,8 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool, verbose: bool) -
     // Check PR status and cleanup merged branches BEFORE sync from remote
     // This handles squash-merged PRs that git can't detect
     // Uses async for parallel PR status checks
-    if !no_cleanup {
+    // By default, auto-delete merged branches (use --keep to preserve them)
+    if !no_cleanup && !keep {
         match get_async_forge(None) {
             Ok(forge) => {
                 if let Err(e) = forge.check_auth() {
@@ -317,53 +319,23 @@ async fn run_sync(force: bool, no_cleanup: bool, restack: bool, verbose: bool) -
                 } else {
                     let merged_prs = find_merged_prs_async(forge.as_ref(), &branches_to_rebase).await;
                     if !merged_prs.is_empty() {
-                        // Prompt for which branches to delete (batch selection)
-                        // Unless --force is set, in which case delete all
-                        let branches_to_delete = if force {
-                            // Force mode: delete all merged branches without prompting
-                            merged_prs.iter().map(|(branch, _)| branch.clone()).collect::<Vec<_>>()
-                        } else {
-                            // Interactive mode: prompt user for batch selection
-                            match ui::select_branches_for_cleanup(&merged_prs) {
-                                Ok(selected) => selected,
-                                Err(_) => {
-                                    // Non-TTY environment - bail with helpful error
-                                    anyhow::bail!(
-                                        "Found {} merged PR(s) but cannot prompt in non-interactive mode.\n\
-                                        Use --force to automatically delete all merged branches.",
-                                        merged_prs.len()
-                                    );
-                                }
-                            }
-                        };
+                        // Auto-delete all merged branches (no prompt)
+                        ui::step(&format!("Cleaning up {} merged PR(s):", merged_prs.len()));
+                        let deleted = cleanup_merged_branches_for_sync_async(
+                            &gateway,
+                            &ref_store,
+                            &mut cache,
+                            &trunk,
+                            &merged_prs,
+                            Some(forge.as_ref()),
+                        )
+                        .await?;
 
-                        // If user chose to delete some branches, proceed with cleanup
-                        if !branches_to_delete.is_empty() {
-                            // Filter merged_prs to only include selected branches
-                            let filtered_prs: Vec<(String, crate::forge::PrInfo)> = merged_prs
-                                .into_iter()
-                                .filter(|(branch, _)| branches_to_delete.contains(branch))
-                                .collect();
-
-                            ui::step(&format!("Cleaning up {} merged PR(s):", filtered_prs.len()));
-                            let deleted = cleanup_merged_branches_for_sync_async(
-                                &gateway,
-                                &ref_store,
-                                &mut cache,
-                                &trunk,
-                                &filtered_prs,
-                                Some(forge.as_ref()),
-                            )
-                            .await?;
-
-                            // Recalculate branches to rebase after cleanup
-                            if !deleted.is_empty() {
-                                // Remove deleted branches from the list
-                                branches_to_rebase.retain(|b| !deleted.contains(b));
-                                println!();
-                            }
-                        } else {
-                            ui::step("Skipped cleanup (no branches selected)");
+                        // Recalculate branches to rebase after cleanup
+                        if !deleted.is_empty() {
+                            // Remove deleted branches from the list
+                            branches_to_rebase.retain(|b| !deleted.contains(b));
+                            println!();
                         }
                     }
                 }
@@ -885,7 +857,7 @@ mod tests {
         let _ctx = TestRepoContext::new(dir.path());
 
         // No trunk configured (RefStore is empty)
-        let result = run(false, false, false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run(false, false, false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -904,7 +876,7 @@ mod tests {
         // No operation in progress
         OperationState::clear().ok();
 
-        let result = run(false, true, false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run(false, true, false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No operation in progress"));
     }
@@ -918,7 +890,7 @@ mod tests {
         // No operation in progress
         OperationState::clear().ok();
 
-        let result = run(true, false, false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run(true, false, false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No operation in progress"));
     }
@@ -1021,7 +993,7 @@ mod tests {
         let state = OperationState::new_restack("main".to_string(), vec!["feature-1".to_string()]);
         state.save().unwrap();
 
-        let result = run(false, true, false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run(false, true, false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -1044,7 +1016,7 @@ mod tests {
         );
         state.save().unwrap();
 
-        let result = run(true, false, false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run(true, false, false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -1069,7 +1041,7 @@ mod tests {
         ref_store.set_parent("missing-branch", "feature-1").unwrap();
 
         // Try to sync - should auto-clean the stale ref for missing-branch
-        let result = run_sync(false, true, false, false).await; // restack=false, verbose=false for tests
+        let result = run_sync(false, true, false, false, false).await; // keep=false, restack=false, verbose=false for tests
         assert!(result.is_ok(), "Sync should succeed after cleaning up stale refs");
 
         // Verify the stale ref was cleaned up

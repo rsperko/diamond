@@ -311,4 +311,13 @@ impl GitGateway {
     pub fn resolve_to_oid(&self, reference: &str) -> Result<refs::Oid> {
         self.backend.get_ref_sha(reference)
     }
+
+    /// Silently clean up orphaned Diamond refs.
+    ///
+    /// This is called by high-frequency commands (log, info, navigation) to prevent
+    /// orphaned metadata accumulation. Errors are silently ignored since cleanup
+    /// is best-effort and should never block normal operations.
+    pub fn cleanup_orphaned_refs_silently(&self) {
+        let _ = crate::validation::silent_cleanup_orphaned_refs(self);
+    }
 }

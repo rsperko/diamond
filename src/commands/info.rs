@@ -93,9 +93,7 @@ pub fn run_trunk(set: Option<String>) -> Result<()> {
 pub fn run(branch: Option<String>) -> Result<()> {
     // Silent cleanup of orphaned refs before displaying info
     let gateway = GitGateway::new()?;
-    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {
-        // Non-fatal: if cleanup fails, still show info
-    }
+    gateway.cleanup_orphaned_refs_silently();
 
     let ref_store = RefStore::new()?;
     let cache = Cache::load().unwrap_or_default();

@@ -11,7 +11,7 @@ pub fn run() -> Result<()> {
     let ref_store = RefStore::new()?;
 
     // Silent cleanup of orphaned refs (handles branches deleted via git/IDE)
-    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {}
+    gateway.cleanup_orphaned_refs_silently();
 
     let current = gateway.get_current_branch_name()?;
     let trunk = ref_store.get_trunk()?;

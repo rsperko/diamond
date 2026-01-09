@@ -17,6 +17,7 @@ pub async fn run(
     no_sync: bool,
     no_wait: bool,
     fast_mode: bool,
+    keep: bool,
 ) -> Result<()> {
     let gateway = GitGateway::new()?;
     let ref_store = RefStore::new()?;
@@ -295,8 +296,8 @@ pub async fn run(
     // Auto-sync to update local branches and clean up merged ones
     if !no_sync && !dry_run {
         println!("\n{} Syncing local branches...", "→".blue());
-        // Run sync with: continue=false, abort=false, force=false, no_cleanup=false, restack=true, verbose=false
-        if let Err(e) = sync::run(false, false, false, false, true, false).await {
+        // Run sync with: continue=false, abort=false, force=false, no_cleanup=false, keep, restack=true, verbose=false
+        if let Err(e) = sync::run(false, false, false, false, keep, true, false).await {
             // Sync errors shouldn't fail the merge command since PRs are already merged
             eprintln!("  {} Sync encountered an issue: {}", "!".yellow(), e);
             eprintln!("  Run '{} sync' manually to complete cleanup.", program_name());

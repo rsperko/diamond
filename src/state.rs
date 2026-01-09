@@ -354,10 +354,12 @@ impl OperationState {
         Ok(())
     }
 
-    /// Create a new Sync operation state
-    pub fn new_sync(original_branch: String, branches: Vec<String>) -> Self {
+    /// Create a new batch operation state (Sync or Restack).
+    ///
+    /// Both Sync and Restack have identical state structure, differing only in operation type.
+    fn new_batch(op_type: OperationType, original_branch: String, branches: Vec<String>) -> Self {
         Self {
-            operation_type: OperationType::Sync,
+            operation_type: op_type,
             in_progress: true,
             current_branch: None,
             remaining_branches: branches.clone(),
@@ -369,19 +371,14 @@ impl OperationState {
         }
     }
 
+    /// Create a new Sync operation state
+    pub fn new_sync(original_branch: String, branches: Vec<String>) -> Self {
+        Self::new_batch(OperationType::Sync, original_branch, branches)
+    }
+
     /// Create a new Restack operation state
     pub fn new_restack(original_branch: String, branches: Vec<String>) -> Self {
-        Self {
-            operation_type: OperationType::Restack,
-            in_progress: true,
-            current_branch: None,
-            remaining_branches: branches.clone(),
-            all_branches: branches,
-            completed_branches: Vec::new(),
-            original_branch,
-            move_target_parent: None,
-            old_parent: None,
-        }
+        Self::new_batch(OperationType::Restack, original_branch, branches)
     }
 
     /// Create a new Move operation state

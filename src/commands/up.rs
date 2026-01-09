@@ -13,7 +13,7 @@ pub fn run(steps: usize, to: Option<String>) -> Result<()> {
     let ref_store = RefStore::new()?;
 
     // Silent cleanup of orphaned refs (handles branches deleted via git/IDE)
-    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {}
+    gateway.cleanup_orphaned_refs_silently();
 
     let current = gateway.get_current_branch_name()?;
 

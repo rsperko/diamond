@@ -35,9 +35,7 @@ pub fn run(
 ) -> Result<()> {
     // Silent cleanup of orphaned refs before checkout
     let gateway = GitGateway::new()?;
-    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {
-        // Non-fatal: if cleanup fails, still proceed with checkout
-    }
+    gateway.cleanup_orphaned_refs_silently();
 
     let ref_store = RefStore::new()?;
 

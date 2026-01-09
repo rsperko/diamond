@@ -27,10 +27,7 @@ pub(crate) enum TuiAction {
 pub fn run(mode: Option<String>) -> Result<()> {
     // Silent cleanup of orphaned refs before displaying log
     let gateway = GitGateway::new()?;
-    if let Err(_e) = crate::validation::silent_cleanup_orphaned_refs(&gateway) {
-        // Non-fatal: if cleanup fails, still show log
-        // Error is silently ignored to avoid disrupting UX
-    }
+    gateway.cleanup_orphaned_refs_silently();
 
     // Load state
     let ref_store = RefStore::new()?;

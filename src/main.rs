@@ -301,9 +301,12 @@ Examples:
         /// Proceed even if external changes detected
         #[arg(short = 'f', long)]
         force: bool,
-        /// Skip cleanup prompt for merged branches
+        /// Skip cleanup of merged branches entirely
         #[arg(long)]
         no_cleanup: bool,
+        /// Keep merged branches instead of deleting them
+        #[arg(long)]
+        keep: bool,
         /// Skip automatic restack after sync
         #[arg(long)]
         no_restack: bool,
@@ -517,6 +520,9 @@ Examples:
         /// Fast mode: skip proactive rebase and CI wait (reactive-only behavior)
         #[arg(long)]
         fast: bool,
+        /// Keep merged branches instead of deleting them
+        #[arg(long)]
+        keep: bool,
     },
     /// Open PR in browser
     Pr {
@@ -838,9 +844,21 @@ async fn main() {
                 abort,
                 force,
                 no_cleanup,
+                keep,
                 no_restack,
                 verbose,
-            } => commands::sync::run(*continue_sync, *abort, *force, *no_cleanup, !*no_restack, *verbose).await,
+            } => {
+                commands::sync::run(
+                    *continue_sync,
+                    *abort,
+                    *force,
+                    *no_cleanup,
+                    *keep,
+                    !*no_restack,
+                    *verbose,
+                )
+                .await
+            }
             Commands::Get { pr, force, unfrozen } => commands::get::run(pr.clone(), *force, *unfrozen),
             Commands::Pr { branch } => commands::pr::run(branch.clone()),
             Commands::Pop => commands::pop::run(),
@@ -854,6 +872,7 @@ async fn main() {
                 no_sync,
                 no_wait,
                 fast,
+                keep,
             } => {
                 let method = if *merge {
                     forge::MergeMethod::Merge
@@ -863,7 +882,7 @@ async fn main() {
                     forge::MergeMethod::Squash // default
                 };
                 let dry_run = crate::context::ExecutionContext::is_dry_run();
-                commands::merge::run(method, dry_run, *yes, *no_sync, *no_wait, *fast).await
+                commands::merge::run(method, dry_run, *yes, *no_sync, *no_wait, *fast, *keep).await
             }
             Commands::Move { onto, source } => commands::move_cmd::run(onto.clone(), source.clone()),
             Commands::Continue => commands::continue_op::run(),

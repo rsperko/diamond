@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`sync` and `merge` now auto-delete merged branches**: No more prompts. Use `--keep` to preserve them.
+
 ## [0.1.3] - 2026-01-07
 
 ### Added
