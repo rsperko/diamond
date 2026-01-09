@@ -74,55 +74,85 @@ publish:
     cargo publish
 
 # ============================================================================
-# RELEASE WORKFLOW (for protected main branch)
+# RELEASE WORKFLOW (PR-based with auto-merge)
 # ============================================================================
 # TL;DR - The complete workflow:
 #   1. Update CHANGELOG.md on your feature branch (under [Unreleased])
 #   2. Merge your PR to main
-#   3. Run: just release-patch  (creates release PR)
-#   4. Merge the release PR
-#   5. Run: just publish-release 0.1.1  (tags & publishes)
+#   3. Run: just release-patch  (creates release PR with auto-merge)
+#   4. Wait ~1-2 minutes for CI to pass and PR to auto-merge
 #   Done! 🎉
 # ============================================================================
 #
-# DETAILED STEPS:
+# PREREQUISITES (one-time setup):
+#   1. Create a crates.io API token:
+#      - Go to: https://crates.io/settings/tokens
+#      - Click "New Token"
+#      - Name: "diamond-releases" (or similar)
+#      - Copy the token
+#
+#   2. Add token to GitHub secrets:
+#      - Go to: https://github.com/rsperko/diamond/settings/secrets/actions
+#      - Click "New repository secret"
+#      - Name: CARGO_REGISTRY_TOKEN
+#      - Value: [paste token]
+#      - Click "Add secret"
+#
+#   3. Install GitHub CLI (if not already installed):
+#      - macOS: brew install gh
+#      - Already authenticated if you can run: gh repo view
+#
+# HOW IT WORKS:
+#   - Local script creates a release PR with version bumps
+#   - PR auto-merges when CI passes (respects branch protection)
+#   - On merge to main, GitHub Actions detects release and publishes
+#   - Main branch stays fully protected (no bypass needed)
+#
+# DETAILED WORKFLOW:
 #
 # Step 1: While working on your feature branch
 #   - Add entries to CHANGELOG.md under the [Unreleased] section
-#   - DO NOT update version in Cargo.toml (the script does this)
+#   - DO NOT update version in Cargo.toml (release script does this)
 #
 # Step 2: Merge to main
-#   - Get your feature PR merged to main
+#   - Get your feature PR merged to main (CI must pass)
 #   - The changelog entries come along with the merge
 #
-# Step 3: Create release PR
+# Step 3: Run the release command
 #   - git checkout main && git pull
 #   - Run: just release-patch   (0.1.0 → 0.1.1)
 #      OR: just release-minor   (0.1.x → 0.2.0)
 #      OR: just release-major   (1.x.x → 2.0.0)
 #
 #   The script will:
-#   ✓ Auto-calculate the new version number
-#   ✓ Create a release branch (release/vX.Y.Z)
+#   ✓ Calculate the new version number
+#   ✓ Create release branch (release/vX.Y.Z)
 #   ✓ Update Cargo.toml with the new version
-#   ✓ Move [Unreleased] to [X.Y.Z] - DATE in CHANGELOG.md
+#   ✓ Update Cargo.lock to match
+#   ✓ Update CHANGELOG.md: [Unreleased] → [X.Y.Z]
 #   ✓ Create a new empty [Unreleased] section
-#   ✓ Run tests to verify everything works
 #   ✓ Commit and push the release branch
-#   ✓ Create a PR to main (via gh CLI)
+#   ✓ Create PR with auto-merge enabled
+#   ✓ Exit (you wait for CI to pass)
 #
-# Step 4: Merge the release PR on GitHub
-#   - Review and merge the release/vX.Y.Z PR
-#
-# Step 5: Publish the release
-#   - git checkout main && git pull
-#   - Run: just publish-release X.Y.Z
-#   - This creates the git tag and publishes to crates.io
-#   - GitHub Actions automatically:
+# Step 4: Wait for automation
+#   - CI runs on the release PR (~30 seconds)
+#   - PR auto-merges when CI passes
+#   - On merge, GitHub Actions:
+#     * Creates git tag vX.Y.Z
+#     * Publishes to crates.io
 #     * Creates GitHub release with CHANGELOG notes
 #     * Updates Homebrew tap formula
 #
-# If anything goes wrong, the scripts abort and provide clear error messages.
+# Step 5: Pull the changes
+#   - After ~1-2 minutes, run: git pull
+#   - You'll see the release commit and tag
+#
+# MONITORING:
+#   - Watch PR: https://github.com/rsperko/diamond/pulls
+#   - Watch Actions: https://github.com/rsperko/diamond/actions
+#
+# If anything goes wrong, GitHub provides detailed logs and the PR can be closed.
 # ============================================================================
 
 # Create a new patch release (0.1.0 -> 0.1.1)
@@ -137,7 +167,7 @@ release-minor:
 release-major:
     @just _release major
 
-# Internal release helper
+# Internal release helper - creates release PR with auto-merge
 _release bump_type:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -153,14 +183,14 @@ _release bump_type:
         echo "❌ ERROR: Must be on 'main' branch (currently on '$BRANCH')"
         echo ""
         echo "Workflow:"
-        echo "  1. Merge your feature branch to main first"
-        echo "  2. Switch to main: git checkout main"
-        echo "  3. Pull latest: git pull"
-        echo "  4. Run: just release-{{bump_type}}"
+        echo "  1. Switch to main: git checkout main"
+        echo "  2. Pull latest: git pull"
+        echo "  3. Run: just release-{{bump_type}}"
         exit 1
     fi
 
     # 2. Verify working tree is clean
+    echo "🔍 Checking git status..."
     if ! git diff-index --quiet HEAD --; then
         echo "❌ ERROR: Working tree has uncommitted changes"
         echo ""
@@ -169,11 +199,21 @@ _release bump_type:
         exit 1
     fi
 
-    # 3. Get current version from Cargo.toml
+    # 3. Verify in sync with remote
+    git fetch origin main --quiet
+    LOCAL=$(git rev-parse main)
+    REMOTE=$(git rev-parse origin/main)
+    if [ "$LOCAL" != "$REMOTE" ]; then
+        echo "⚠️  WARNING: Local main is not in sync with remote"
+        echo ""
+        echo "Run: git pull"
+        exit 1
+    fi
+
+    # 4. Get current version and calculate next
     CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
     echo "📦 Current version: $CURRENT_VERSION"
 
-    # 4. Calculate next version
     IFS='.' read -r -a VERSION_PARTS <<< "$CURRENT_VERSION"
     MAJOR="${VERSION_PARTS[0]}"
     MINOR="${VERSION_PARTS[1]}"
@@ -194,7 +234,7 @@ _release bump_type:
     echo "📦 New version: $NEW_VERSION"
     echo ""
 
-    # 5. Verify CHANGELOG has [Unreleased] section with content
+    # 5. Verify CHANGELOG has content
     if ! grep -q "## \[Unreleased\]" CHANGELOG.md; then
         echo "❌ ERROR: CHANGELOG.md missing [Unreleased] section"
         echo ""
@@ -202,33 +242,46 @@ _release bump_type:
         exit 1
     fi
 
-    # Check if there's actual content under [Unreleased]
     UNRELEASED_CONTENT=$(sed -n '/## \[Unreleased\]/,/## \[/p' CHANGELOG.md | grep -v "^## " | grep -E "^-|^###" | wc -l)
     if [ "$UNRELEASED_CONTENT" -eq 0 ]; then
         echo "⚠️  WARNING: [Unreleased] section appears empty"
         echo ""
-        read -p "Continue anyway? [y/N]: " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            echo "Aborted."
-            exit 1
-        fi
     fi
 
-    # 6. Show what will happen
+    # 6. Verify gh CLI is installed and authenticated
+    if ! command -v gh &> /dev/null; then
+        echo "❌ ERROR: GitHub CLI (gh) is not installed"
+        echo ""
+        echo "Install with: brew install gh"
+        echo "Then authenticate: gh auth login"
+        exit 1
+    fi
+
+    if ! gh auth status &> /dev/null; then
+        echo "❌ ERROR: GitHub CLI is not authenticated"
+        echo ""
+        echo "Run: gh auth login"
+        exit 1
+    fi
+
+    # 7. Show what will happen
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📋 Release Plan"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "Will perform these steps:"
-    echo "  1. Update Cargo.toml: $CURRENT_VERSION → $NEW_VERSION"
-    echo "  2. Update CHANGELOG.md: [Unreleased] → [$NEW_VERSION] - $(date +%Y-%m-%d)"
-    echo "  3. Commit changes: 'Release v$NEW_VERSION'"
-    echo "  4. Create git tag: v$NEW_VERSION"
-    echo "  5. Push to origin with tags"
-    echo "  6. Publish to crates.io"
+    echo "This will create a release PR that:"
+    echo "  1. Updates Cargo.toml: $CURRENT_VERSION → $NEW_VERSION"
+    echo "  2. Updates Cargo.lock to match"
+    echo "  3. Updates CHANGELOG.md: [Unreleased] → [$NEW_VERSION]"
+    echo "  4. Auto-merges when CI passes"
     echo ""
-    read -p "Proceed with release? [y/N]: " -n 1 -r
+    echo "After merge, GitHub Actions will:"
+    echo "  5. Create and push git tag: v$NEW_VERSION"
+    echo "  6. Publish to crates.io"
+    echo "  7. Create GitHub release"
+    echo "  8. Update Homebrew tap"
+    echo ""
+    read -p "Create release PR? [y/N]: " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         echo "Aborted."
@@ -236,159 +289,78 @@ _release bump_type:
     fi
     echo ""
 
-    # 7. Update Cargo.toml version
+    # 8. Create release branch
+    echo "🌿 Creating release branch..."
+    git checkout -b "release/v$NEW_VERSION"
+
+    # 9. Update Cargo.toml
     echo "📝 Updating Cargo.toml..."
     sed -i '' "s/^version = \".*\"/version = \"$NEW_VERSION\"/" Cargo.toml
 
-    # 8. Update CHANGELOG.md - replace [Unreleased] with version and date
+    # 10. Update Cargo.lock
+    echo "📝 Updating Cargo.lock..."
+    cargo update --workspace --quiet
+
+    # 11. Update CHANGELOG.md
     echo "📝 Updating CHANGELOG.md..."
     TODAY=$(date +%Y-%m-%d)
     sed -i '' "s/## \[Unreleased\]/## [$NEW_VERSION] - $TODAY/" CHANGELOG.md
 
-    # Add new empty [Unreleased] section at the top
-    awk "/^## \[$NEW_VERSION\]/ {print \"\"; print \"## [Unreleased]\"; print \"\";} {print}" CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+    # Add new empty [Unreleased] section
+    awk "/^## \[$NEW_VERSION\]/ {print \"\"; print \"## [Unreleased]\"; print \"\";} {print}" CHANGELOG.md > CHANGELOG.tmp
+    mv CHANGELOG.tmp CHANGELOG.md
 
-    # 9. Run tests one final time
-    echo ""
-    echo "🧪 Running final test suite..."
-    if ! cargo nextest run --hide-progress-bar --success-output never --failure-output immediate-final; then
-        echo "❌ Tests failed! Aborting release."
-        git checkout Cargo.toml CHANGELOG.md
-        exit 1
-    fi
-
-    # 10. Create release branch
-    echo ""
-    echo "🌿 Creating release branch..."
-    git checkout -b "release/v$NEW_VERSION"
-
-    # 11. Commit changes
-    echo "💾 Committing version bump..."
-    git add Cargo.toml CHANGELOG.md
+    # 12. Commit changes
+    echo "💾 Committing changes..."
+    git add Cargo.toml Cargo.lock CHANGELOG.md
     git commit -m "Release v$NEW_VERSION"
 
-    # 12. Push release branch
+    # 13. Push release branch
     echo "📤 Pushing release branch..."
     git push -u origin "release/v$NEW_VERSION"
 
-    # 13. Create PR
-    echo ""
-    echo "📝 Creating release PR..."
-    gh pr create \
+    # 14. Create PR with auto-merge
+    echo "📝 Creating PR with auto-merge..."
+    PR_URL=$(gh pr create \
         --base main \
         --head "release/v$NEW_VERSION" \
         --title "Release v$NEW_VERSION" \
         --body "Automated release PR for v$NEW_VERSION
 
-    This PR updates:
-    - Cargo.toml version: $CURRENT_VERSION → $NEW_VERSION
-    - CHANGELOG.md: Moves [Unreleased] entries to [$NEW_VERSION]
+This PR updates:
+- Cargo.toml version: $CURRENT_VERSION → $NEW_VERSION
+- Cargo.lock to match
+- CHANGELOG.md: Moves [Unreleased] entries to [$NEW_VERSION]
 
-    After merging, run:
-    \`\`\`bash
-    git checkout main && git pull
-    just publish-release $NEW_VERSION
-    \`\`\`
-    "
+After merge, GitHub Actions will:
+- Create git tag v$NEW_VERSION
+- Publish to crates.io
+- Create GitHub release
+- Update Homebrew tap" \
+        --auto-merge --squash)
 
-    # Done with first phase!
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Release PR created for v$NEW_VERSION"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "📋 Next steps:"
-    echo "  1. Review and merge the PR: https://github.com/rsperko/diamond/pulls"
-    echo "  2. After merge, run:"
-    echo "     git checkout main && git pull"
-    echo "     just publish-release $NEW_VERSION"
-    echo ""
-
-# Publish a release after the PR is merged
-# Usage: just publish-release 0.1.1
-publish-release version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📦 Publishing Release v{{version}}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-
-    # 1. Verify we're on main
-    BRANCH=$(git branch --show-current)
-    if [ "$BRANCH" != "main" ]; then
-        echo "❌ ERROR: Must be on 'main' branch (currently on '$BRANCH')"
-        echo ""
-        echo "Run: git checkout main && git pull"
-        exit 1
-    fi
-
-    # 2. Verify working tree is clean
-    if ! git diff-index --quiet HEAD --; then
-        echo "❌ ERROR: Working tree has uncommitted changes"
-        echo ""
-        echo "Run: git status"
-        exit 1
-    fi
-
-    # 3. Verify version in Cargo.toml matches
-    CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-    if [ "$CURRENT_VERSION" != "{{version}}" ]; then
-        echo "❌ ERROR: Version mismatch!"
-        echo "   Cargo.toml version: $CURRENT_VERSION"
-        echo "   Requested version:  {{version}}"
-        echo ""
-        echo "Did you forget to merge the release PR?"
-        echo "Run: git pull"
-        exit 1
-    fi
-
-    # 4. Verify this version doesn't already exist as a tag
-    if git rev-parse "v{{version}}" >/dev/null 2>&1; then
-        echo "❌ ERROR: Tag v{{version}} already exists!"
-        echo ""
-        echo "If you need to re-release, delete the tag first:"
-        echo "  git tag -d v{{version}}"
-        echo "  git push origin :refs/tags/v{{version}}"
-        exit 1
-    fi
-
-    # 5. Show what will happen
-    echo "Will perform these steps:"
-    echo "  1. Create git tag v{{version}}"
-    echo "  2. Push tag to GitHub"
-    echo "  3. Publish to crates.io"
-    echo ""
-    read -p "Proceed with publishing? [y/N]: " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Aborted."
-        exit 1
-    fi
-    echo ""
-
-    # 6. Create and push tag
-    echo "🏷️  Creating git tag v{{version}}..."
-    git tag "v{{version}}"
-
-    echo "📤 Pushing tag to GitHub..."
-    git push origin "v{{version}}"
-
-    # 7. Publish to crates.io
-    echo ""
-    echo "📦 Publishing to crates.io..."
-    cargo publish
+    # 15. Return to main
+    git checkout main
 
     # Done!
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Release v{{version}} published!"
+    echo "✅ Release PR created!"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
-    echo "🔗 View release:"
-    echo "   https://github.com/rsperko/diamond/releases/tag/v{{version}}"
-    echo "   https://crates.io/crates/diamond-cli"
+    echo "🔗 PR URL: $PR_URL"
+    echo ""
+    echo "📊 What happens next:"
+    echo "  1. CI runs on the PR (~30 seconds)"
+    echo "  2. PR auto-merges when CI passes"
+    echo "  3. GitHub Actions publishes the release (~1 minute)"
+    echo ""
+    echo "Monitor progress:"
+    echo "  • PR: $PR_URL"
+    echo "  • Actions: https://github.com/rsperko/diamond/actions"
+    echo ""
+    echo "After ~1-2 minutes, pull the changes:"
+    echo "  git pull"
     echo ""
 
 # Create isolated test repo for manual testing
