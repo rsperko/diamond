@@ -1,0 +1,114 @@
+name: Publish on Release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+permissions:
+  contents: write  # Required for creating tags
+
+jobs:
+  detect-and-publish:
+    name: Detect Release and Publish
+    # Only run if PR was merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check if this is a release PR
+        id: check_release
+        run: |
+          # Check if PR head branch starts with "release/v"
+          HEAD_BRANCH="${{ github.event.pull_request.head.ref }}"
+          echo "PR head branch: $HEAD_BRANCH"
+
+          if [[ "$HEAD_BRANCH" =~ ^release/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            VERSION="${BASH_REMATCH[1]}"
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "✅ Detected release PR: v$VERSION"
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Not a release PR (branch: $HEAD_BRANCH), skipping"
+          fi
+
+      - name: Checkout repository
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: main  # Checkout main after merge
+          fetch-depth: 1
+
+      - name: Verify version in Cargo.toml matches
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          EXPECTED_VERSION="${{ steps.check_release.outputs.version }}"
+
+          if [ "$CARGO_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "❌ ERROR: Version mismatch!"
+            echo "   Cargo.toml: $CARGO_VERSION"
+            echo "   Expected:   $EXPECTED_VERSION"
+            exit 1
+          fi
+
+          echo "✅ Version verified: $CARGO_VERSION"
+
+      - name: Check if tag already exists
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          if git ls-remote --tags origin | grep -q "refs/tags/v$VERSION"; then
+            echo "❌ ERROR: Tag v$VERSION already exists!"
+            exit 1
+          fi
+          echo "✅ Tag v$VERSION does not exist yet"
+
+      - name: Set up Rust
+        if: steps.check_release.outputs.is_release == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Create and push tag
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+          echo "✅ Created and pushed tag v$VERSION"
+
+      - name: Publish to crates.io
+        if: steps.check_release.outputs.is_release == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          echo "📦 Publishing v$VERSION to crates.io..."
+          cargo publish --token $CARGO_REGISTRY_TOKEN
+          echo "✅ Published to crates.io"
+
+      - name: Release summary
+        if: steps.check_release.outputs.is_release == 'true'
+        run: |
+          VERSION="${{ steps.check_release.outputs.version }}"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Release v$VERSION published!"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "🏷️  Tag: v$VERSION"
+          echo "📝 Commit: $(git rev-parse --short HEAD)"
+          echo ""
+          echo "The 'release.yml' workflow will now:"
+          echo "  • Create GitHub release with CHANGELOG notes"
+          echo "  • Update Homebrew tap formula"
+          echo ""
+          echo "🔗 View at:"
+          echo "   https://github.com/${{ github.repository }}/releases/tag/v$VERSION"
+          echo "   https://crates.io/crates/diamond-cli"
