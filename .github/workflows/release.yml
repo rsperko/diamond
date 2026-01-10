@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract version from tag
         id: version
@@ -69,7 +69,7 @@ jobs:
           rm diamond.tar.gz
 
       - name: Checkout homebrew-tap repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: rsperko/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_PAT }}
